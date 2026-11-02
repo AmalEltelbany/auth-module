@@ -40,6 +40,9 @@
 | `MongoMemoryServer` for e2e tests | Transactions fail on a standalone `mongod` | Me, cross-checking two docs | `MongoMemoryReplSet` |
 | Vitest `^5` in one doc, `~5.0` in the other | Inconsistent pins across apps | Me, cross-checking two docs | Both pinned to `~5.0` |
 | Explanation of why Swagger fails on TS 7 | Stated from memory | Asked; verified on npm | Confirmed via peer ranges; the reason is labelled as inference |
+| `helmet` on the trimmed library list | Nest 12 already ships `app.useSecurityHeaders()` ("same headers and defaults as helmet 8") | Agent read the installed Nest type definitions before coding, instead of trusting the research doc | Dropped helmet; an e2e test asserts the headers |
+| Cookies "like Express" (`maxAge` in ms) | Nest 12's built-in `setCookie` takes **seconds**; a copied ms value makes a 15-min cookie live ~10 days | Same type-definition check | `maxAge: 15 * 60`; e2e asserts `Max-Age=900` |
+| First smoke test "passed" against port 3000 | Port 3000 was my other project's dev server, so every request hit the wrong app | Responses were HTML, not JSON | Re-ran on 3100; API default moved to 3001 |
 
 ## Decisions log
 
@@ -63,6 +66,8 @@ Who decided: **Me** (my call), **Me ← AI** (I accepted the AI's recommendation
 | 14 | Repo name | fullstack-auth / auth-module / nest-react-auth | `auth-module` | Me ≠ AI | Matches the task's wording ("implement a module") |
 | 15 | Research notes | commit / keep local | Keep local, git-ignored | Me | Personal working notes, not part of the submission |
 | 16 | What counts as a letter / special character | ASCII `[a-z]` / Unicode `\p{L}`; space special or not | Unicode letters; space is **not** special | Me ← AI | Non-English names and passwords work; a space alone doesn't satisfy "special" |
+| 17 | Security headers / CSRF / cookies | helmet + csrf-csrf + cookie-parser / Nest 12 built-ins | Built-ins | Research | Found in the installed framework; three fewer dependencies |
+| 18 | Unknown email at sign-in | return 401 immediately / verify against a dummy hash | Dummy-hash verify | Me ← AI | Same response time for unknown and wrong-password, so timing doesn't reveal accounts |
 
 ## Build log
 
@@ -87,3 +92,33 @@ Each step records: **prompt → what AI generated → what I changed → how it 
   - `npm install`: 0 vulnerabilities
   - `npm run typecheck`, `npm run build`: clean
   - `npm test`: 25 of 25 pass. Before the rules were written, 17 of 20 passed and the 3 password tests failed as expected, which confirmed they actually exercise the rules.
+
+### Step 2: API core (sign up, sign in, logout, `/users/me`)
+- **Prompt:** "Start step 2"
+- **Generated:**
+  - `apps/api`, NestJS 12 (ESM):
+    - `config.ts`: zod-validated env, loaded with Node's built-in `process.loadEnvFile()`, no dotenv
+    - `users`: Mongoose schema with a unique email index, `passwordHash` hidden with `select: false`, and `sessionVersion`
+    - `auth`: argon2id hashing, a 15-min JWT in a `__Host-` httpOnly / Secure / SameSite=Strict cookie, and a global guard with a `@Public()` opt-out that checks `sessionVersion`
+    - a global RFC 9457 problem-details filter (Mongo duplicate key `11000` → 409 on the `email` field)
+    - Nest 12's Standard Schema pipe validating with the **shared** zod schemas, plus throttling, built-in security headers, built-in CSRF protection and Swagger at `/api/docs`
+  - `test/auth.e2e-spec.ts`: 12 supertest tests against a real `MongoMemoryReplSet`
+  - `docker-compose.yml`: a Mongo 8 single-node replica set that initiates itself
+- **Changed:**
+  - **Checked the framework before writing code.** I had the agent read the installed NestJS type definitions, not docs or memory. That removed **helmet** (Nest 12 has `useSecurityHeaders()`), confirmed the built-in cookie and CSRF APIs, and caught that `setCookie` `maxAge` is in seconds.
+  - **Deep import** for reading cookies inside the guard: Nest doesn't export that helper publicly yet. Marked with a `ponytail:` comment naming the upgrade path.
+  - **Smoke-test port collision.** Port 3000 was my other project's dev server. Moved the API default to 3001.
+  - **Refresh tokens deferred to step 4.** For now, sessions last 15 minutes.
+  - **Accepted one npm audit finding:** a moderate `minimatch` advisory in `@nestjs/cli`, a build-time tool that never runs in production.
+- **Verified:**
+  - `npm run typecheck`, `npm run build`: clean
+  - `npm test`: shared 25/25, API e2e 12/12. Covers:
+    - 201 with hardened cookie flags (`Max-Age=900`)
+    - 409 on a duplicate email in any case
+    - 400 field errors
+    - identical 401 for a wrong password and an unknown email
+    - `/users/me` with and without a session
+    - logout clears the cookie
+    - security headers, CSRF rejection of `Sec-Fetch-Site: cross-site`, and OpenAPI paths
+    - pinned: `passwordHash` never appears in a response
+  - Manual smoke test of the **built** server (`node dist/main.js`) against Docker Mongo: health, signup 201 with a cookie, `/users/me` 401 then 200, and the Swagger UI loads

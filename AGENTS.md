@@ -48,7 +48,8 @@ Local services: `docker compose up` (Mongo replica set, Mailpit inbox on `http:/
 
 ## Stack
 
-- **API**: NestJS 12.1+ (Express), Mongoose 9, `@nestjs/jwt`, argon2, zod 4, throttler, helmet, swagger, nodemailer
+- **API**: NestJS 12.1+ (Express), Mongoose 9, `@nestjs/jwt`, argon2, zod 4, throttler, swagger, nodemailer. Security headers, CSRF protection and cookies are Nest 12 built-ins (`useSecurityHeaders()`, `enableCsrfProtection()`, `httpAdapter.setCookie()`), so no helmet or cookie-parser.
+- **Cookies:** `setCookie` `maxAge` is in **seconds** (Express' `res.cookie` uses milliseconds).
 - **Web**: React 19, Vite 8, react-router 8 (data mode), Tailwind 4, shadcn/ui on Radix, sonner, react-hook-form + zod
 - **Tests**: Vitest (both apps), supertest + mongodb-memory-server (API), Testing Library + jsdom (web)
 - **Package manager**: npm workspaces
@@ -101,7 +102,7 @@ const copy = structuredClone(obj);
 
 - Platform first: `structuredClone`, `Object.groupBy`, `BroadcastChannel`, `fetch`, native input attributes.
 - State why a new dependency earns its place in the commit message.
-- Considered and rejected, so don't add them without a reason: pino, terminus, `@nestjs/config`, msw, jest-dom, axe, jsx-a11y-x, lodash, Redux/Zustand, TanStack Query.
+- Considered and rejected, so don't add them without a reason: helmet, cookie-parser, dotenv (`process.loadEnvFile()`), pino, terminus, `@nestjs/config`, msw, jest-dom, axe, jsx-a11y-x, lodash, Redux/Zustand, TanStack Query.
 
 ## Simplifications
 
