@@ -6,3 +6,6 @@ coverage/
 
 # local research notes (not part of the submission)
 docs/
+
+# local agent/editor launch config
+.claude/

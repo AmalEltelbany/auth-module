@@ -43,6 +43,11 @@
 | `helmet` on the trimmed library list | Nest 12 already ships `app.useSecurityHeaders()` ("same headers and defaults as helmet 8") | Agent read the installed Nest type definitions before coding, instead of trusting the research doc | Dropped helmet; an e2e test asserts the headers |
 | Cookies "like Express" (`maxAge` in ms) | Nest 12's built-in `setCookie` takes **seconds**; a copied ms value makes a 15-min cookie live ~10 days | Same type-definition check | `maxAge: 15 * 60`; e2e asserts `Max-Age=900` |
 | First smoke test "passed" against port 3000 | Port 3000 was my other project's dev server, so every request hit the wrong app | Responses were HTML, not JSON | Re-ran on 3100; API default moved to 3001 |
+| Dev Mongo published on `0.0.0.0:27017` | An unauthenticated database reachable from the local network | Automated security review of the step 2 commit | Bound to `127.0.0.1` only |
+| Session re-check on every `visibilitychange` | Fired even when signed out: 21 pointless `/users/me` 401s in one browser session | Reading the browser console during manual testing (the unit tests passed) | Listener only active while signed in. Verified: 0 extra requests when signed out. |
+| Vite template pinned TypeScript `~7.0.2` | Would break the TS 6 pin the Nest tooling needs | Reviewed the generated `package.json` before installing | Removed it; the web app uses the root TS 6.0 |
+| shadcn's `sonner.tsx` imports `next-themes` | A stale Next.js package we had rejected, added silently | Read the generated component | Removed; toasts follow the OS theme |
+| Web tests: all 10 failed | jsdom has no `window.matchMedia`, which sonner calls | Test run | Small stub in the test setup |
 
 ## Decisions log
 
@@ -68,6 +73,11 @@ Who decided: **Me** (my call), **Me ← AI** (I accepted the AI's recommendation
 | 16 | What counts as a letter / special character | ASCII `[a-z]` / Unicode `\p{L}`; space special or not | Unicode letters; space is **not** special | Me ← AI | Non-English names and passwords work; a space alone doesn't satisfy "special" |
 | 17 | Security headers / CSRF / cookies | helmet + csrf-csrf + cookie-parser / Nest 12 built-ins | Built-ins | Research | Found in the installed framework; three fewer dependencies |
 | 18 | Unknown email at sign-in | return 401 immediately / verify against a dummy hash | Dummy-hash verify | Me ← AI | Same response time for unknown and wrong-password, so timing doesn't reveal accounts |
+| 19 | jsdom version | 30 (needs Node ≥ 24.15) / 29.1 | 29.1 | Me ← AI | My machine (and likely graders') runs Node 24.14; no behaviour difference for these forms |
+| 20 | Linter | ESLint + plugins / oxlint from the Vite template | oxlint | Me ← AI | The template's default; no ESLint 10 plugin-compatibility problems |
+| 21 | Security review: logout only clears the cookie | bump `sessionVersion` / revoke the refresh family in step 4 | Step 4 | Me ← AI | `sessionVersion` would sign out every device; a 15-min access token is the accepted residual window |
+| 22 | Security review: signup 409 reveals registered emails | email-only signup / keep 409 | Keep, documented | Me | Already a documented trade-off; a better UX for this task |
+| 23 | After sign-in, where to go | `navigate()` in each form hook / let the `<GuestOnly>` route redirect | Route redirect | Me ← AI | One place handles "return to the page you asked for" |
 
 ## Build log
 
@@ -122,3 +132,34 @@ Each step records: **prompt → what AI generated → what I changed → how it 
     - security headers, CSRF rejection of `Sec-Fetch-Site: cross-site`, and OpenAPI paths
     - pinned: `passwordHash` never appears in a response
   - Manual smoke test of the **built** server (`node dist/main.js`) against Docker Mongo: health, signup 201 with a cookie, `/users/me` 401 then 200, and the Swagger UI loads
+
+### Step 3: web core (sign up, sign in, welcome page)
+- **Prompt:** "Start step 3"
+- **Generated:**
+  - `apps/web`, Vite 8 + React 19:
+    - Tailwind 4 + shadcn on **Radix** (Nova preset)
+    - `lib/api.ts`: the only `fetch`; same-origin `/api` through Vite's proxy; problem details become `ApiError`
+    - `lib/form-errors.ts`: server field errors go under their input, anything else above the button
+    - `AuthProvider`: union-type state, `/users/me` check on startup, cross-tab logout via `BroadcastChannel`
+    - `RequireAuth` / `GuestOnly` layout routes
+    - sign-up and sign-in pages: shared zod schemas, live password checklist, show/hide password, correct `autocomplete` values
+    - welcome page with the exact "Welcome to the application." text and a logout button
+  - 10 component tests that render the **real route table** with only the network mocked
+- **Changed:**
+  - **Reviewed generated code before trusting it.** The Vite template pinned TS 7, and shadcn added `next-themes`. Both removed (see Corrections).
+  - **jsdom 29 instead of 30**, so the project runs on Node 24.14 without an upgrade.
+  - **Security review of step 2 (automated):** bound dev Mongo to localhost. The logout and signup-409 findings are recorded as decisions 21–22.
+  - **Bug found only by manual testing:** the session re-check fired on every tab-visibility change, even when signed out. Fixed and re-verified.
+- **Verified:**
+  - `npm run lint` (0 errors; 2 fast-refresh warnings on deliberate provider + hook files), `npm run typecheck`, `npm run build`
+  - `npm test`: shared 25/25, API 12/12, web 10/10
+  - **Manual, in a real browser against the real API and Mongo:**
+    - sign-up field error shown after leaving the field
+    - live checklist
+    - sign-up → "Account created" toast → welcome page
+    - `document.cookie` and both storages **empty** (the session is httpOnly only)
+    - session survives a reload; logout then reload goes to `/signin`
+    - wrong password shows the generic error
+    - duplicate email (different case) shows the error under the email field
+    - layout correct at 375px
+  - Bundle: 163 kB gzipped (React DOM plus full zod). Acceptable for now; token pages will be lazy-loaded in step 5.

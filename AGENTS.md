@@ -52,13 +52,14 @@ Local services: `docker compose up` (Mongo replica set, Mailpit inbox on `http:/
 - **Cookies:** `setCookie` `maxAge` is in **seconds** (Express' `res.cookie` uses milliseconds).
 - **Web**: React 19, Vite 8, react-router 8 (data mode), Tailwind 4, shadcn/ui on Radix, sonner, react-hook-form + zod
 - **Tests**: Vitest (both apps), supertest + mongodb-memory-server (API), Testing Library + jsdom (web)
+- **Lint**: oxlint (the Vite template's linter), with `npm run lint` at the root
 - **Package manager**: npm workspaces
 
 ## Versions (pinned on purpose)
 
 | Pin | Why |
 |---|---|
-| Node **≥ 24.15** | jsdom 30 requires it; react-router 8 requires ≥ 22.22 |
+| Node **≥ 24** | react-router 8 needs ≥ 22.22. Web tests use jsdom **~29.1** because jsdom 30 needs Node ≥ 24.15. |
 | TypeScript **~6.0** | The Nest CLI bundles TS 6, `@nestjs/swagger` peers `^5.5 \|\| ^6`, and typescript-eslint peers `<6.1` |
 | `@nestjs/*` **^12.1** | Built-in cookies and `enableCsrfProtection()` start at 12.1 |
 | Vitest **~5.0** | 5.1.0 was brand new when we pinned. Bump deliberately. |
@@ -102,7 +103,7 @@ const copy = structuredClone(obj);
 
 - Platform first: `structuredClone`, `Object.groupBy`, `BroadcastChannel`, `fetch`, native input attributes.
 - State why a new dependency earns its place in the commit message.
-- Considered and rejected, so don't add them without a reason: helmet, cookie-parser, dotenv (`process.loadEnvFile()`), pino, terminus, `@nestjs/config`, msw, jest-dom, axe, jsx-a11y-x, lodash, Redux/Zustand, TanStack Query.
+- Considered and rejected, so don't add them without a reason: helmet, cookie-parser, dotenv (`process.loadEnvFile()`), next-themes (shadcn's sonner adds it; ours follows the OS theme), pino, terminus, `@nestjs/config`, msw, jest-dom, axe, jsx-a11y-x, lodash, Redux/Zustand, TanStack Query.
 
 ## Simplifications
 
@@ -380,7 +381,7 @@ const checks = passwordRules.map(r => ({ label: r.label, ok: r.test(pw) }));
 
 - **Use `MongoMemoryReplSet`, not `MongoMemoryServer`.** Password reset runs in a transaction, which fails on a standalone `mongod`.
 - Nest under Vitest needs `unplugin-swc`, or decorator metadata is dropped and injected services are `undefined`.
-- Web tests mock the network at `lib/api.ts` (`vi.mock('@/lib/api')`). The `api.ts` tests stub `fetch` (`vi.stubGlobal`).
+- Web tests render the real route table with `renderApp(path)` from `src/test/render-app.tsx` and mock only the network at `lib/api.ts` (`vi.mock('@/lib/api')`). The `api.ts` tests stub `fetch` (`vi.stubGlobal`).
 - Find elements by role or label, never by CSS class or test id:
 
 ```ts
