@@ -1,7 +1,7 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
 import type { SignInInput, SignUpInput } from '@auth-module/shared/auth-schemas';
 import type { User } from '@auth-module/shared/types';
-import { api } from '@/lib/api';
+import { api, onSessionExpired } from '@/lib/api';
 
 type AuthState =
   | { status: 'loading' }
@@ -29,9 +29,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Logging out in one tab logs out every tab.
     const channel = new BroadcastChannel('auth');
     channel.onmessage = (e) => e.data === 'logout' && setState({ status: 'unauthenticated' });
+    // A request whose session couldn't be refreshed signs the user out.
+    const unsubscribe = onSessionExpired(() => setState({ status: 'unauthenticated' }));
     return () => {
       active = false;
       channel.close();
+      unsubscribe();
     };
   }, []);
 

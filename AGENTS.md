@@ -131,7 +131,10 @@ Mark deliberate shortcuts so they read as intent, and name the upgrade path:
 
 ## Tokens and cookies
 
-- Access JWT (≤ 15 min) and refresh token live **only** in httpOnly, `Secure`, `SameSite=Strict` cookies.
+- Access JWT (≤ 15 min) and refresh token live **only** in httpOnly, `Secure`, `SameSite=Strict` cookies:
+  - `__Host-access_token`, `Path=/`
+  - `__Secure-refresh_token`, `Path=/api/auth`, 7 days. It's scoped to the auth routes, so the long-lived token never travels with ordinary API calls.
+- Logout revokes only **this device's** family. A copied access token can still work until it expires (≤ 15 min); that's the accepted trade-off of short-lived JWTs.
 - Refresh tokens are opaque, stored **hashed**, rotated on every use, and grouped in families. Reusing an already-used token revokes the whole family.
 - Access JWTs carry `sessionVersion`. The guard compares it with the user's, so a password reset kills live access tokens too.
 
@@ -253,7 +256,7 @@ await this.users.create({ email, ... });
 | Method | Path | Access |
 |---|---|---|
 | POST | `/auth/signup`, `/auth/signin`, `/auth/refresh` | public, throttled |
-| POST | `/auth/logout` | protected |
+| POST | `/auth/logout` | public, uses the refresh cookie (works with an expired access token) |
 | POST | `/auth/verify-email` | public, throttled |
 | POST | `/auth/verify-email/resend` | protected, 3 / 15 min |
 | POST | `/auth/forgot-password` | public, always 202 |
@@ -381,6 +384,8 @@ const checks = passwordRules.map(r => ({ label: r.label, ok: r.test(pw) }));
 
 - **Use `MongoMemoryReplSet`, not `MongoMemoryServer`.** Password reset runs in a transaction, which fails on a standalone `mongod`.
 - Nest under Vitest needs `unplugin-swc`, or decorator metadata is dropped and injected services are `undefined`.
+- `MONGOMS_DOWNLOAD_DIR` is pinned in `apps/api/vitest.config.ts` to the root `node_modules/.cache`. Don't remove it: running from `apps/api` would fall back to `~/.cache` and download ~800 MB again.
+- A pinned test must fail when its protection is removed. When adding one, break the code it guards once and watch it fail.
 - Web tests render the real route table with `renderApp(path)` from `src/test/render-app.tsx` and mock only the network at `lib/api.ts` (`vi.mock('@/lib/api')`). The `api.ts` tests stub `fetch` (`vi.stubGlobal`).
 - Find elements by role or label, never by CSS class or test id:
 
@@ -417,5 +422,6 @@ These guard security decisions. Never delete or weaken them; if one fails, the c
 | 3 simultaneous 401s → exactly 1 `/auth/refresh` | refresh reuse detection logging the user out |
 | Forgot-password returns 202 for unknown emails and when throttled | account enumeration |
 | Reusing a used refresh token revokes the family | stolen refresh tokens |
+| A refresh token issued before a `sessionVersion` bump fails | a password reset leaving a session alive through refresh |
 | After a reset, old sessions and the old password fail | sessions surviving a reset |
 | `passwordHash` never appears in any response | hash leaks |

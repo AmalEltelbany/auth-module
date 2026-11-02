@@ -1,22 +1,34 @@
 import 'reflect-metadata';
 import type { INestApplication } from '@nestjs/common';
+import { getModelToken } from '@nestjs/mongoose';
 import { Test } from '@nestjs/testing';
+import type { Model } from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const ACCESS_COOKIE = '__Host-access_token';
+const REFRESH_COOKIE = '__Secure-refresh_token';
 const valid = { email: 'Ada@Example.com', name: 'Ada Lovelace', password: 'Passw0rd!' };
 
 let app: INestApplication;
 let replSet: MongoMemoryReplSet;
 let http: ReturnType<typeof request>;
 
-/** The `name=value` pair of the session cookie, ready to send back. */
-function sessionCookie(res: request.Response): string {
-  const header = ([] as string[]).concat(res.headers['set-cookie'] ?? []).find((c) => c.startsWith(ACCESS_COOKIE));
-  expect(header, 'session cookie').toBeDefined();
-  return header!.split(';')[0]!;
+/** The full Set-Cookie header for `name`. */
+function setCookie(res: request.Response, name: string): string {
+  const header = ([] as string[]).concat(res.headers['set-cookie'] ?? []).find((c) => c.startsWith(`${name}=`));
+  expect(header, `${name} cookie`).toBeDefined();
+  return header!;
+}
+
+/** The `name=value` pair of a cookie, ready to send back. */
+const cookie = (res: request.Response, name: string) => setCookie(res, name).split(';')[0]!;
+const sessionCookie = (res: request.Response) => cookie(res, ACCESS_COOKIE);
+
+async function signIn() {
+  const res = await http.post('/api/auth/signin').send({ email: valid.email, password: valid.password }).expect(200);
+  return { access: cookie(res, ACCESS_COOKIE), refresh: cookie(res, REFRESH_COOKIE) };
 }
 
 beforeAll(async () => {
@@ -108,6 +120,65 @@ describe('protected routes', () => {
     const signin = await http.post('/api/auth/signin').send({ email: valid.email, password: valid.password });
     const res = await http.post('/api/auth/logout').set('Cookie', sessionCookie(signin)).expect(204);
     expect(sessionCookie(res)).toBe(`${ACCESS_COOKIE}=`);
+  });
+});
+
+describe('refresh tokens', () => {
+  it('are httpOnly cookies scoped to /api/auth, never sent to other routes', async () => {
+    const res = await http.post('/api/auth/signin').send({ email: valid.email, password: valid.password }).expect(200);
+    const header = setCookie(res, REFRESH_COOKIE);
+    expect(header).toMatch(/Path=\/api\/auth(;|$)/);
+    expect(header).toMatch(/HttpOnly/i);
+    expect(header).toMatch(/Secure/i);
+    expect(header).toMatch(/SameSite=Strict/i);
+    expect(header).toMatch(/Max-Age=604800/);
+  });
+
+  it('rotate: refresh returns new cookies and the new access token works', async () => {
+    const first = await signIn();
+    const res = await http.post('/api/auth/refresh').set('Cookie', first.refresh).expect(200);
+
+    const next = { access: cookie(res, ACCESS_COOKIE), refresh: cookie(res, REFRESH_COOKIE) };
+    expect(next.refresh).not.toBe(first.refresh);
+    expect(res.body.email).toBe('ada@example.com');
+    await http.get('/api/users/me').set('Cookie', next.access).expect(200);
+  });
+
+  // Pinned: reusing a used refresh token revokes the family.
+  it('treats a replayed refresh token as theft and revokes the whole family', async () => {
+    const { refresh: stolen } = await signIn();
+    const legit = await http.post('/api/auth/refresh').set('Cookie', stolen).expect(200);
+    const legitRefresh = cookie(legit, REFRESH_COOKIE);
+
+    await http.post('/api/auth/refresh').set('Cookie', stolen).expect(401); // the replay
+    await http.post('/api/auth/refresh').set('Cookie', legitRefresh).expect(401); // family is gone too
+  });
+
+  it('rejects a missing or unknown token and clears both cookies', async () => {
+    await http.post('/api/auth/refresh').expect(401);
+    const res = await http.post('/api/auth/refresh').set('Cookie', `${REFRESH_COOKIE}=forged`).expect(401);
+    expect(cookie(res, ACCESS_COOKIE)).toBe(`${ACCESS_COOKIE}=`);
+    expect(cookie(res, REFRESH_COOKIE)).toBe(`${REFRESH_COOKIE}=`);
+  });
+
+  it('dies when the user’s sessionVersion moves on (what a password reset does)', async () => {
+    const { access, refresh } = await signIn();
+    const users = app.get<Model<{ email: string; sessionVersion: number }>>(getModelToken('UserRecord'));
+    await users.updateOne({ email: 'ada@example.com' }, { $inc: { sessionVersion: 1 } });
+
+    await http.get('/api/users/me').set('Cookie', access).expect(401); // old access token
+    await http.post('/api/auth/refresh').set('Cookie', refresh).expect(401); // old refresh token
+    await signIn(); // a fresh sign-in still works
+  });
+
+  it('logout revokes this device only', async () => {
+    const thisDevice = await signIn();
+    const otherDevice = await signIn();
+
+    await http.post('/api/auth/logout').set('Cookie', thisDevice.refresh).expect(204);
+
+    await http.post('/api/auth/refresh').set('Cookie', thisDevice.refresh).expect(401);
+    await http.post('/api/auth/refresh').set('Cookie', otherDevice.refresh).expect(200);
   });
 });
 

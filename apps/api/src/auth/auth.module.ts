@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { config } from '../config.js';
+import { SessionsModule } from '../sessions/sessions.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { ACCESS_TOKEN_TTL_SECONDS } from './auth.cookies.js';
 import { AuthController } from './auth.controller.js';
@@ -11,6 +12,7 @@ import { AuthService } from './auth.service.js';
 @Module({
   imports: [
     UsersModule,
+    SessionsModule,
     JwtModule.register({
       secret: config.JWT_ACCESS_SECRET,
       signOptions: { expiresIn: ACCESS_TOKEN_TTL_SECONDS },

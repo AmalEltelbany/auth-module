@@ -48,6 +48,8 @@
 | Vite template pinned TypeScript `~7.0.2` | Would break the TS 6 pin the Nest tooling needs | Reviewed the generated `package.json` before installing | Removed it; the web app uses the root TS 6.0 |
 | shadcn's `sonner.tsx` imports `next-themes` | A stale Next.js package we had rejected, added silently | Read the generated component | Removed; toasts follow the OS theme |
 | Web tests: all 10 failed | jsdom has no `window.matchMedia`, which sonner calls | Test run | Small stub in the test setup |
+| `refresh()` ignored `sessionVersion` | A refresh token issued before a password reset could have minted fresh access tokens afterwards, bypassing "sign out everywhere" (latent: nothing bumped the version yet) | Automated security review of the uncommitted step 4 | Each session row stores the version it was issued under; refresh rejects a mismatch and revokes the family. New pinned test, mutation-checked |
+| First mutation run "skipped" all 17 tests | Running vitest from `apps/api` made mongodb-memory-server download mongod into `~/.cache`; the timeout killed it, leaving a broken 950 KB binary (`spawn EFTYPE`) | Read the actual error instead of trusting "skipped" | Deleted the broken files; pinned `MONGOMS_DOWNLOAD_DIR` in the vitest config |
 
 ## Decisions log
 
@@ -78,6 +80,10 @@ Who decided: **Me** (my call), **Me ← AI** (I accepted the AI's recommendation
 | 21 | Security review: logout only clears the cookie | bump `sessionVersion` / revoke the refresh family in step 4 | Step 4 | Me ← AI | `sessionVersion` would sign out every device; a 15-min access token is the accepted residual window |
 | 22 | Security review: signup 409 reveals registered emails | email-only signup / keep 409 | Keep, documented | Me | Already a documented trade-off; a better UX for this task |
 | 23 | After sign-in, where to go | `navigate()` in each form hook / let the `<GuestOnly>` route redirect | Route redirect | Me ← AI | One place handles "return to the page you asked for" |
+| 24 | Refresh cookie scope | `__Host-` (forces `Path=/`) / `__Secure-` with `Path=/api/auth` | `__Secure-`, `/api/auth` | Me ← AI | The 7-day token only travels to the auth routes |
+| 25 | Logout scope | this device / all devices | This device (revokes its family) | Me ← AI | Logging out on a phone shouldn't sign out the laptop; "all devices" comes with password reset |
+| 26 | Parallel refresh with the same token | grace window / strict single-use + single-flight client | Strict + single-flight | Me ← AI | No window in which a stolen token works; the client guarantees one refresh at a time |
+| 27 | How to prove pinned tests | trust them / break the guarded code once | Mutation check | Me ← AI | Both pinned tests failed with the protection removed and passed with it restored |
 
 ## Build log
 
@@ -163,3 +169,25 @@ Each step records: **prompt → what AI generated → what I changed → how it 
     - duplicate email (different case) shows the error under the email field
     - layout correct at 375px
   - Bundle: 163 kB gzipped (React DOM plus full zod). Acceptable for now; token pages will be lazy-loaded in step 5.
+
+### Step 4: refresh tokens and sessions
+- **Prompt:** "Start step 4"
+- **Generated:**
+  - `sessions` module: one row per refresh token, stored as sha256 only, in families, with a TTL index. `rotate()` claims the token with a single atomic `findOneAndUpdate`. A token that was already used counts as a replay, and its whole family is revoked.
+  - auth:
+    - sign-up and sign-in also set `__Secure-refresh_token` (`Path=/api/auth`, 7 days)
+    - `POST /auth/refresh` rotates both cookies and clears them on failure
+    - logout is public and revokes this device's family, which addresses the step 2 security-review finding
+  - web `lib/api.ts`: on a 401, one shared refresh call, then each request retried once. If the refresh fails, an `onSessionExpired` event signs the user out. Auth routes never trigger a refresh.
+  - tests: 5 new API e2e tests, including the **pinned** reuse-detection test, and 4 `api.ts` unit tests, including the **pinned** "3 parallel 401s → 1 refresh" test
+- **Changed:**
+  - **Mutation-checked both pinned tests.** With reuse detection disabled, exactly the reuse test failed. With `??=` changed to `=`, the parallel test failed with "expected 3 to be 1". Both pass with the code restored.
+  - **The first mutation run reported "17 skipped", not a failure.** The real cause was a broken mongod download triggered by running from a different directory. Fixed by pinning the binary cache (see Corrections).
+  - **Security review before committing:** `refresh()` didn't check `sessionVersion`, so step 5's reset could have been bypassed through refresh. Sessions now record the version they were issued under. `rotate()` became `claim()`, then a version check in `AuthService`, then `create()` for the next token in the family. New pinned test, mutation-checked.
+- **Verified:**
+  - `npm run lint`, `typecheck`, `build`: clean
+  - `npm test`: shared 25, API 18, web 14, so **57/57**
+  - **In a real browser:**
+    - signed in, then invalidated every access token by rotating the API's JWT secret and restarting it
+    - reloading showed `me 401, me 401 → refresh 200 (once) → me 200, me 200`, and the user stayed signed in
+    - after logout, the browser's refresh cookie got 401: revoked on the server
