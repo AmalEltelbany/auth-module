@@ -8,7 +8,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const ACCESS_COOKIE = '__Host-access_token';
-const REFRESH_COOKIE = '__Secure-refresh_token';
+const REFRESH_COOKIE = '__Host-refresh_token';
 const valid = { email: 'Ada@Example.com', name: 'Ada Lovelace', password: 'Passw0rd!' };
 
 let app: INestApplication;
@@ -124,10 +124,11 @@ describe('protected routes', () => {
 });
 
 describe('refresh tokens', () => {
-  it('are httpOnly cookies scoped to /api/auth, never sent to other routes', async () => {
+  it('are __Host- cookies: httpOnly, Secure, Path=/ and no Domain, so subdomains can’t plant them', async () => {
     const res = await http.post('/api/auth/signin').send({ email: valid.email, password: valid.password }).expect(200);
     const header = setCookie(res, REFRESH_COOKIE);
-    expect(header).toMatch(/Path=\/api\/auth(;|$)/);
+    expect(header).toMatch(/Path=\/(;|$)/);
+    expect(header).not.toMatch(/Domain=/i);
     expect(header).toMatch(/HttpOnly/i);
     expect(header).toMatch(/Secure/i);
     expect(header).toMatch(/SameSite=Strict/i);

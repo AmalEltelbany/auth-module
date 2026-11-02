@@ -132,8 +132,9 @@ Mark deliberate shortcuts so they read as intent, and name the upgrade path:
 ## Tokens and cookies
 
 - Access JWT (≤ 15 min) and refresh token live **only** in httpOnly, `Secure`, `SameSite=Strict` cookies:
-  - `__Host-access_token`, `Path=/`
-  - `__Secure-refresh_token`, `Path=/api/auth`, 7 days. It's scoped to the auth routes, so the long-lived token never travels with ordinary API calls.
+  - `__Host-access_token`, 15 min
+  - `__Host-refresh_token`, 7 days
+  - **Both must keep the `__Host-` prefix** (forces `Secure`, `Path=/`, no `Domain`). With `__Secure-` and a narrower path, a sibling subdomain could plant its own refresh token ("cookie tossing") and sign a victim into the attacker's account.
 - Logout revokes only **this device's** family. A copied access token can still work until it expires (≤ 15 min); that's the accepted trade-off of short-lived JWTs.
 - Refresh tokens are opaque, stored **hashed**, rotated on every use, and grouped in families. Reusing an already-used token revokes the whole family.
 - Access JWTs carry `sessionVersion`. The guard compares it with the user's, so a password reset kills live access tokens too.
