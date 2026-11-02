@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+
+# local research notes (not part of the submission)
+docs/
