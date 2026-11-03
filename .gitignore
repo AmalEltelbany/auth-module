@@ -9,6 +9,8 @@ playwright-report/
 # local research notes (not part of the submission), except the UI decisions
 docs/*
 !docs/UI.md
+!docs/system-design.png
+!docs/system-design.excalidraw
 
 # local agent/editor launch config
 .claude/

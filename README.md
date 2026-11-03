@@ -8,6 +8,20 @@ apps/web         React app (Vite, Tailwind, shadcn/ui)
 packages/shared  zod schemas and password rules used by BOTH apps
 ```
 
+## System design
+
+Tokens stay in two httpOnly cookies. `apps/web` posts to `/api` with `credentials: 'include'`. The Nest API sets `__Host-access_token` (15 min) and `__Host-refresh_token` (7 days), and `AuthService` decides lockout, rotation, and one-time codes. Users, sessions, and codes are separate writers into one MongoDB replica set. Mail and the Have I Been Pwned range API sit outside that process: signup does not wait for mail, and a breached-password check fails open.
+
+![Auth module system design: the request sets httpOnly cookies, Mongo stores hashes rather than secrets, and password reset spends the code before the transaction](docs/system-design.png)
+
+Open [the interactive map](.archify/2026-11-03-auth-module/auth-module.architecture.html) in a browser to follow a node back to the file that implements it. The drawing above is the same design, argued in three bands.
+
+**Request.** React calls the API. The controller writes the cookies, and page scripts leave them alone. On a 401 from a protected call, the web app refreshes once, and every caller in that moment shares that one refresh. A second presentation of the same refresh token revokes the family.
+
+**Stored form.** The user document keeps an argon2id hash (`select: false`) and a `sessionVersion`. A session row keeps the sha256 of the refresh token. A code row keeps an HMAC of the 6-digit code. Five wrong attempts kill that code. Ten wrong codes per account per day cap guessing that works by asking for a fresh code.
+
+**Reset order.** The breached-password check runs first, so a rejected password leaves the code unused. The code is then consumed outside any transaction, and the attempt stays spent if the request fails. After that, one transaction saves the new hash, bumps `sessionVersion`, revokes every session family, and deletes reset codes.
+
 ## Quick start
 
 **You need:** Node.js 24 and Docker.
