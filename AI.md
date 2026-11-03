@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Tool** | Claude Code (desktop app), model Claude Opus 5.5 |
+| **Tool** | Claude Code|
 | **Mode** | Agent: it reads files, runs commands, edits code, and spawns background research sub-agents |
 | **What AI did** | Planning, research against primary sources, scaffolding, boilerplate, first drafts of code and tests |
 | **What I did** | Set scope, made every decision in the log below, pushed back on over-engineering, reviewed and verified output |
