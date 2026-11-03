@@ -392,6 +392,59 @@ describe('password reset (6-digit code)', () => {
   });
 });
 
+describe('guessing budgets (per account, across codes and parallel requests)', () => {
+  const users = () => app.get<Model<Record<string, unknown>>>(getModelToken('UserRecord'));
+  const ageMailCooldown = (email: string) =>
+    users().updateOne({ email }, { 'mailSentAt.reset': new Date(Date.now() - 120_000) });
+
+  // Pinned: 10 wrong codes per account per day, however many codes are issued.
+  it('requesting fresh codes does not buy more guesses: 10 wrong per day, then even the right code is refused', async () => {
+    await signUpAs('lamport@example.com');
+    const body = { email: 'lamport@example.com', password: 'New-pass1!', confirm: 'New-pass1!' };
+    // Waits for a NEW mail: the send is fire-and-forget, so "the latest mail"
+    // right after the request may still be the previous (already replaced) code.
+    const newCode = async () => {
+      const before = mailsTo('lamport@example.com', 'reset').length;
+      await ageMailCooldown('lamport@example.com');
+      await http.post('/api/auth/forgot-password').send({ email: 'lamport@example.com' }).expect(202);
+      await vi.waitFor(() => expect(mailsTo('lamport@example.com', 'reset')).toHaveLength(before + 1));
+      return codeFromMail('lamport@example.com', 'reset');
+    };
+
+    for (let round = 0; round < 2; round++) {
+      const code = await newCode();
+      for (let i = 0; i < 5; i++) await http.post('/api/auth/reset-password').send({ ...body, code: wrong(code) }).expect(400);
+    }
+
+    const third = await newCode();
+    await http.post('/api/auth/reset-password').send({ ...body, code: third }).expect(400); // budget spent
+
+    // After the 24 h window the same (unspent) code works.
+    await users().updateOne({ email: 'lamport@example.com' }, { codeFailuresSince: new Date(Date.now() - 25 * 3600_000) });
+    await http.post('/api/auth/reset-password').send({ ...body, code: third }).expect(204);
+  });
+
+  it('parallel sign-in attempts reserve at most 5 (no race past the lockout)', async () => {
+    await signUpAs('lynch@example.com');
+    const { UsersService } = await import('../src/users/users.service.js');
+    const service = app.get(UsersService);
+    const id = String((await users().findOne({ email: 'lynch@example.com' }))!._id);
+
+    const results = await Promise.all(Array.from({ length: 12 }, () => service.reserveLoginAttempt(id, 5)));
+    expect(results.filter((r) => r !== null)).toHaveLength(5);
+  });
+
+  it('parallel code checks reserve at most 10 from the daily budget', async () => {
+    await signUpAs('gray@example.com');
+    const { UsersService } = await import('../src/users/users.service.js');
+    const service = app.get(UsersService);
+    const id = String((await users().findOne({ email: 'gray@example.com' }))!._id);
+
+    const results = await Promise.all(Array.from({ length: 15 }, () => service.reserveCodeAttempt(id, 10, 86_400)));
+    expect(results.filter(Boolean)).toHaveLength(10);
+  });
+});
+
 describe('breached passwords', () => {
   it('sign-up rejects a breached password on the password field', async () => {
     const res = await http

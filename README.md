@@ -83,6 +83,8 @@ Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details. V
 
 **One-time codes**
 - **Format:** 6 digits, 10-minute expiry, **5 wrong attempts and the code is dead**.
+- **Daily budget:** at most 10 wrong codes per account per 24 h, across every code issued. Requesting fresh codes doesn't buy more guesses.
+- **Reserve, then verify:** sign-in attempts and code checks are counted atomically *before* comparing, so parallel requests can't race past the limits.
 - **Storage:** HMAC'd with a server-side key. Plain hashes of a 6-digit code could be reversed instantly from a leaked database.
 - **Attempt counting:** atomic, and outside any transaction, so an aborted request can't roll back a wrong guess.
 

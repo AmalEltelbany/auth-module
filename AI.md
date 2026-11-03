@@ -103,6 +103,8 @@ Who decided: **Me** (my call), **Me ← AI** (I accepted the AI's recommendation
 | 36 | Locked account response | "account locked" / generic 401 | Generic 401 | Me ← AI | A distinct message confirms the account exists; reset is the way out |
 | 37 | Per-IP throttling in e2e | keep (tests hit limits) / skip when `NODE_ENV=test` | Skip in tests | Me ← AI | All test traffic shares one IP. 429 verified manually; per-account limits stay tested |
 | 38 | Breach check on HIBP outage | fail closed / fail open | Fail open | Me ← AI | An outage of a third-party API must not block sign-up or reset |
+| 39 | Guessing limits | per code only / per code + per-account daily budget | Both | **Research** | Security review showed per-code limits reset with every new code |
+| 40 | Counting attempts | check, then increment / reserve atomically, then verify, refund on success | Reserve first | **Research** | Only the atomic version holds under parallel requests |
 
 ## Build log
 
@@ -271,3 +273,15 @@ Each step records: **prompt → what AI generated → what I changed → how it 
     - **Verification:** sign-up, then the email contains only the code (no link, no name), entered with a pasted space, then 204, home, banner gone. An 18-minute-old code was correctly refused as expired.
     - **Reset:** forgot, then the reset page with the email filled in, then the code from Mailpit and a new password, then `/signin`
     - **After the reset:** a second device's access and refresh tokens give 401, the old password 401, the new one 200, reusing the code 400, and the "password changed" email arrived
+
+### Step 7: fixes from the security review of step 6
+- **Prompt:** none. Two automated security reviews of the step 6 commit, acted on before pushing.
+- **Findings and changes:**
+  - **OTP brute force across codes (high).** The 5-attempt limit was per code, and a new code could be requested every 60 s: ~7,200 guesses a day, about a 0.7% chance per day of taking over an account. **Fix:** a per-account budget of 10 wrong codes per 24 h, across every code (`reserveCodeAttempt`). This brings it to about 0.001% per day.
+  - **Race in the lockout (medium).** Parallel wrong passwords all read "not locked" before any counter moved. **Fix:** reserve the attempt atomically *before* verifying the password, and refund it on success (`reserveLoginAttempt`). The code budget uses the same pattern.
+  - **Lockout can be triggered by someone else (medium). Acknowledged, not changed:** it lasts 15 min, a reset lifts it, and the README lists it as a trade-off. Progressive delays or CAPTCHA would be the next step for a real product.
+- **Changed:** my first version of the budget test was itself buggy. It read "the latest mail" before the fire-and-forget email had arrived, so it used an already-replaced code. Fixed it by waiting for one *new* email, then ran the suite 3× to rule out flakiness.
+- **Verified:**
+  - 3 new tests (cross-code budget; 12 parallel sign-in reservations → exactly 5; 15 parallel code reservations → exactly 10)
+  - **Mutation-checked:** removing the budget, the login limit or the code limit fails exactly the matching tests
+  - full suite green (see the commit)

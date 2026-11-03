@@ -153,6 +153,7 @@ Emails carry a **6-digit code** the user types into the app. There are no links.
 - `crypto.randomInt`, zero-padded. Stored as an **HMAC** (server key from config), never a plain hash: a 6-digit code has only 10⁶ values, so a leaked plain sha256 would be reversed instantly.
 - **One live code per user and type.** Look codes up by `userId` + `type`, never by the code itself (codes repeat across users). Issuing a new code deletes the old one.
 - **Expiry 10 min** (ASVS 6.5.5). **5 wrong attempts and the code is dead.**
+- **Plus a daily budget per account across all codes:** 10 wrong codes per 24 h (`reserveCodeAttempt`). The per-code limit alone resets with every new code, and a new code can be requested every 60 s. Check codes only through `AuthService.checkCode()`, which applies both limits.
 - **Every check spends an attempt first**, in one atomic `findOneAndUpdate` (`attempts < 5` → `$inc`), then compares with `timingSafeEqual`, then claims `usedAt` atomically.
 - **Never check a code inside a transaction.** An abort would roll the attempt counter back and allow unlimited guesses. Check it first, then run the transaction.
 - Keep the `expiresAt` check in the query. Mongo's TTL cleanup only runs about once a minute.
@@ -171,6 +172,7 @@ Emails carry a **6-digit code** the user types into the app. There are no links.
 - **Hashing and rules:** argon2id. Minimum 8 (task spec; NIST's 15 noted as a deviation), maximum 128, letter + number + special character.
 - **Breached passwords** are checked at sign-up and reset with `BreachedPasswordsService`, which uses the HIBP range API and fails open. At reset, the check runs **before** the code, so a rejected password doesn't use the code up.
 - **Lockout:** 5 consecutive wrong passwords lock the account for 15 min. The counter lives on the user document, so it works across instances. Success resets it, and a password reset lifts the lock.
+- **Reserve, then verify:** a sign-in attempt and a code check each **spend first** (one atomic update), then compare, then refund on success. Never "read the counter, verify, then increment": parallel requests all read the old count.
 - **Sign-in only checks that a password was entered.** **Never** apply strength rules at sign-in; that locks out existing accounts.
 - **One place for the rules:** `packages/shared/src/password-rules.ts`.
 
@@ -430,6 +432,8 @@ These guard security decisions. Never delete or weaken them; if one fails, the c
 | Test | Guards |
 |---|---|
 | A code is dead after 5 wrong attempts, even if the 6th is right | brute-forcing a 6-digit code |
+| Fresh codes don't buy more guesses: 10 wrong per account per day | brute force by re-requesting codes |
+| Parallel sign-in / code reservations never exceed the limit | races past the lockout and budgets |
 | Reset gives the same answer for an unknown email and a wrong code | account enumeration |
 | 5 wrong passwords lock the account; the right one is refused with the generic message | password guessing across IPs |
 | 3 simultaneous 401s → exactly 1 `/auth/refresh` | refresh reuse detection logging the user out |

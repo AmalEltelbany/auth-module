@@ -33,6 +33,15 @@ export class UserRecord {
   // raw(): a plain nested object, not a subdocument (which would get its own _id).
   @Prop(raw({ verify: { type: Date }, reset: { type: Date } }))
   mailSentAt?: { verify?: Date; reset?: Date };
+
+  // Wrong one-time codes in the current 24 h window, across ALL codes issued.
+  // The per-code limit alone resets with every new code, so it can't stop an
+  // attacker who keeps requesting fresh ones.
+  @Prop({ default: 0 })
+  codeFailures!: number;
+
+  @Prop({ type: Date, default: null })
+  codeFailuresSince!: Date | null;
 }
 
 export type UserDocument = HydratedDocument<UserRecord>;

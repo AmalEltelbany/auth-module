@@ -23,6 +23,10 @@ const MAIL_COOLDOWN_SECONDS = 60;
 // Per account, on top of the per-IP throttle: rotating IPs doesn't help guessing.
 const MAX_FAILED_LOGINS = 5;
 const LOCK_SECONDS = 15 * 60;
+// Wrong one-time codes per account per day, across every code issued: about a
+// 0.001% chance of guessing a 6-digit code per day, still generous for typos.
+const MAX_DAILY_CODE_FAILURES = 10;
+const CODE_BUDGET_WINDOW_SECONDS = 24 * 60 * 60;
 
 @Injectable()
 export class AuthService implements OnModuleInit {
@@ -59,7 +63,7 @@ export class AuthService implements OnModuleInit {
   /** The signed-in user confirms their address with the emailed code. */
   async verifyEmail(user: User, code: string): Promise<void> {
     if (user.emailVerified) return;
-    if (!(await this.codes.consume(user.id, 'verify', code))) throw new BadRequestException(INVALID_CODE);
+    if (!(await this.checkCode(user.id, 'verify', code))) throw new BadRequestException(INVALID_CODE);
     await this.users.markEmailVerified(user.id);
   }
 
@@ -92,7 +96,7 @@ export class AuthService implements OnModuleInit {
     // The code is checked OUTSIDE the transaction: a wrong guess must spend an
     // attempt even though the request fails (an abort would roll it back).
     // Unknown emails get the same error as wrong codes.
-    if (!user || !(await this.codes.consume(user.id, 'reset', input.code))) {
+    if (!user || !(await this.checkCode(user.id, 'reset', input.code))) {
       throw new BadRequestException(INVALID_CODE);
     }
 
@@ -105,6 +109,20 @@ export class AuthService implements OnModuleInit {
     });
 
     this.inBackground('password changed email', () => this.mail.sendPasswordChanged(user.email));
+  }
+
+  /**
+   * Two limits on guessing: 5 attempts per code, and a daily budget per
+   * account across ALL codes. The second stops an attacker who requests a fresh
+   * code every minute to get 5 more guesses each time.
+   */
+  private async checkCode(userId: string, type: 'verify' | 'reset', code: string): Promise<boolean> {
+    if (!(await this.users.reserveCodeAttempt(userId, MAX_DAILY_CODE_FAILURES, CODE_BUDGET_WINDOW_SECONDS))) {
+      return false;
+    }
+    const ok = await this.codes.consume(userId, type, code);
+    if (ok) await this.users.clearCodeFailures(userId);
+    return ok;
   }
 
   /** A field error on `password`, so the form shows it under the input. */
@@ -129,19 +147,22 @@ export class AuthService implements OnModuleInit {
 
   async signIn(input: SignInInput, userAgent?: string): Promise<AuthResult> {
     const user = await this.users.findByEmailWithHash(input.email);
-    const locked = !!user?.lockedUntil && user.lockedUntil > new Date();
+    // Spend the attempt BEFORE checking the password, atomically: parallel
+    // guesses can't all read "not locked" first. null = locked / out of attempts.
+    const attempt = user ? await this.users.reserveLoginAttempt(user.id, MAX_FAILED_LOGINS) : null;
     // Always verify (even when locked or unknown) so every failure takes the same time.
     const valid = await argon2.verify(user?.passwordHash ?? this.dummyHash, input.password);
 
-    if (!user || locked || !valid) {
-      if (user && !locked && (await this.users.recordFailedLogin(user.id, MAX_FAILED_LOGINS, LOCK_SECONDS))) {
+    if (!user || attempt === null || !valid) {
+      if (user && attempt === MAX_FAILED_LOGINS && !valid) {
+        await this.users.lock(user.id, LOCK_SECONDS);
         this.logger.warn(`Account ${user.id} locked for ${LOCK_SECONDS / 60} min after ${MAX_FAILED_LOGINS} failed sign-ins`);
       }
       // Same answer when locked: a distinct message would confirm the account exists.
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    if (user.failedLogins > 0 || user.lockedUntil) await this.users.clearFailedLogins(user.id);
+    await this.users.clearFailedLogins(user.id); // the reserved attempt was a success
     return this.startSession(user, userAgent);
   }
 
