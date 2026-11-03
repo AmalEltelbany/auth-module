@@ -28,11 +28,13 @@ export class ProblemDetailsFilter implements ExceptionFilter {
         message?: unknown;
         errors?: ProblemDetails['errors'];
       };
+      // The throttler's own message ("ThrottlerException: …") isn't meant for users.
+      const detail = status === 429 ? 'Too many attempts. Please wait a few minutes and try again.' : message;
       return {
         type: 'about:blank',
         title: STATUS_CODES[status] ?? 'Error',
         status,
-        ...(typeof message === 'string' && { detail: message }),
+        ...(typeof detail === 'string' && { detail }),
         ...(errors && { errors }),
       };
     }
