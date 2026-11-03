@@ -37,7 +37,7 @@ async function codeFromMail(to: string, kind: 'verify' | 'reset'): Promise<strin
 
 /** A code guaranteed to differ from `code`. */
 const wrong = (code: string) => (code === '000000' ? '111111' : '000000');
-const INVALID_CODE = 'This code is invalid or has expired. Request a new one.';
+const INVALID_CODE = 'This OTP is invalid or has expired. Request a new one.';
 const BREACHED_PASSWORD = 'Breached-pass1!';
 const BREACHED_MESSAGE = 'This password has appeared in a data breach. Choose a different one.';
 
@@ -332,7 +332,7 @@ describe('password reset (6-digit code)', () => {
     await http.post('/api/auth/forgot-password').send({ email: 'liskov@example.com' }).expect(202);
     const code = await codeFromMail('liskov@example.com', 'reset');
 
-    const reset = { email: 'liskov@example.com', code, password: 'New-pass1!', confirm: 'New-pass1!' };
+    const reset = { email: 'liskov@example.com', code, password: 'New-pass1!' };
     await http.post('/api/auth/reset-password').send(reset).expect(204);
 
     await http.get('/api/users/me').set('Cookie', laptop.access).expect(401); // old access token
@@ -342,7 +342,7 @@ describe('password reset (6-digit code)', () => {
     const fresh = await http.post('/api/auth/signin').send({ email: 'liskov@example.com', password: 'New-pass1!' }).expect(200);
     expect(fresh.body.emailVerified).toBe(true); // owning the inbox proves the address
 
-    await http.post('/api/auth/reset-password').send({ ...reset, password: 'Other-pass1!', confirm: 'Other-pass1!' }).expect(400);
+    await http.post('/api/auth/reset-password').send({ ...reset, password: 'Other-pass1!' }).expect(400);
     await vi.waitFor(() => expect(mailsTo('liskov@example.com', 'changed')).toHaveLength(1));
   });
 
@@ -352,7 +352,7 @@ describe('password reset (6-digit code)', () => {
     await http.post('/api/auth/forgot-password').send({ email: 'hoare@example.com' }).expect(202);
     const code = await codeFromMail('hoare@example.com', 'reset');
 
-    const body = { password: 'New-pass1!', confirm: 'New-pass1!' };
+    const body = { password: 'New-pass1!' };
     const unknown = await http.post('/api/auth/reset-password').send({ ...body, email: 'ghost@example.com', code }).expect(400);
     const wrongCode = await http.post('/api/auth/reset-password').send({ ...body, email: 'hoare@example.com', code: wrong(code) }).expect(400);
     expect(unknown.body).toEqual(wrongCode.body);
@@ -363,7 +363,7 @@ describe('password reset (6-digit code)', () => {
     await signUpAs('codd@example.com');
     await http.post('/api/auth/forgot-password').send({ email: 'codd@example.com' }).expect(202);
     const code = await codeFromMail('codd@example.com', 'reset');
-    const body = { email: 'codd@example.com', password: 'New-pass1!', confirm: 'New-pass1!' };
+    const body = { email: 'codd@example.com', password: 'New-pass1!' };
 
     for (let i = 0; i < 5; i++) {
       await http.post('/api/auth/reset-password').send({ ...body, code: wrong(code) }).expect(400);
@@ -372,21 +372,10 @@ describe('password reset (6-digit code)', () => {
     await http.post('/api/auth/signin').send({ email: 'codd@example.com', password: 'Passw0rd!' }).expect(200); // unchanged
   });
 
-  it('a mismatched confirmation fails on the confirm field and leaves the code usable', async () => {
-    await signUpAs('hamilton@example.com');
-    await http.post('/api/auth/forgot-password').send({ email: 'hamilton@example.com' }).expect(202);
-    const code = await codeFromMail('hamilton@example.com', 'reset');
-    const body = { email: 'hamilton@example.com', code, password: 'New-pass1!' };
-
-    const res = await http.post('/api/auth/reset-password').send({ ...body, confirm: 'New-pass2!' }).expect(400);
-    expect(res.body.errors).toEqual([{ path: 'confirm', message: 'Passwords don’t match' }]);
-    await http.post('/api/auth/reset-password').send({ ...body, confirm: 'New-pass1!' }).expect(204);
-  });
-
   it('rejects a weak new password with field errors', async () => {
     const res = await http
       .post('/api/auth/reset-password')
-      .send({ email: 'a@b.co', code: '123456', password: 'weak', confirm: 'weak' })
+      .send({ email: 'a@b.co', code: '123456', password: 'weak' })
       .expect(400);
     expect(res.body.errors.map((e: { path: string }) => e.path)).toContain('password');
   });
@@ -400,7 +389,7 @@ describe('guessing budgets (per account, across codes and parallel requests)', (
   // Pinned: 10 wrong codes per account per day, however many codes are issued.
   it('requesting fresh codes does not buy more guesses: 10 wrong per day, then even the right code is refused', async () => {
     await signUpAs('lamport@example.com');
-    const body = { email: 'lamport@example.com', password: 'New-pass1!', confirm: 'New-pass1!' };
+    const body = { email: 'lamport@example.com', password: 'New-pass1!' };
     // Waits for a NEW mail: the send is fire-and-forget, so "the latest mail"
     // right after the request may still be the previous (already replaced) code.
     const newCode = async () => {
@@ -459,12 +448,12 @@ describe('breached passwords', () => {
     await http.post('/api/auth/forgot-password').send({ email: 'ritchie@example.com' }).expect(202);
     const code = await codeFromMail('ritchie@example.com', 'reset');
 
-    const breached = { email: 'ritchie@example.com', code, password: BREACHED_PASSWORD, confirm: BREACHED_PASSWORD };
+    const breached = { email: 'ritchie@example.com', code, password: BREACHED_PASSWORD };
     const res = await http.post('/api/auth/reset-password').send(breached).expect(400);
     expect(res.body.errors).toEqual([{ path: 'password', message: BREACHED_MESSAGE }]);
     await http
       .post('/api/auth/reset-password')
-      .send({ ...breached, password: 'Fresh-pass1!', confirm: 'Fresh-pass1!' })
+      .send({ ...breached, password: 'Fresh-pass1!' })
       .expect(204);
   });
 });
@@ -496,7 +485,7 @@ describe('account lockout', () => {
     const code = await codeFromMail('peggy@example.com', 'reset');
     await http
       .post('/api/auth/reset-password')
-      .send({ email: 'peggy@example.com', code, password: 'Fresh-pass1!', confirm: 'Fresh-pass1!' })
+      .send({ email: 'peggy@example.com', code, password: 'Fresh-pass1!' })
       .expect(204);
     await signInAs('peggy@example.com', 'Fresh-pass1!').expect(200);
   });

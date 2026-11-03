@@ -5,7 +5,7 @@ import { forgotPasswordSchema } from '@auth-module/shared/auth-schemas';
 import { FieldGroup } from '@/components/ui/field';
 import { api } from '@/lib/api';
 import { applyServerErrors } from '@/lib/form-errors';
-import { AuthLayout } from '../components/AuthLayout';
+import { AuthLayout, authLinkClass } from '../components/AuthLayout';
 import { FormError, SubmitButton } from '../components/FormStatus';
 import { TextField } from '../components/TextField';
 
@@ -29,20 +29,20 @@ export default function ForgotPasswordPage() {
 
   return (
     <AuthLayout
-      title="Forgot your password?"
-      description="Enter your email and we'll send you a 6-digit code."
-      footer={
-        <Link to="/signin" className="text-foreground underline underline-offset-4">
+      title="Reset password"
+      description="Enter the email associated with your account and we’ll send you an OTP."
+      back={
+        <Link to="/signin" className={authLinkClass}>
           Back to sign in
         </Link>
       }
     >
-      <form onSubmit={onSubmit} noValidate className="grid gap-5">
+      <form onSubmit={onSubmit} noValidate className="grid gap-6">
         <FieldGroup>
-          <TextField id="email" label="Email" type="email" autoComplete="email" error={errors.email} {...register('email')} />
+          <TextField id="email" label="Email" type="email" autoComplete="username" error={errors.email} {...register('email')} />
         </FieldGroup>
         <FormError message={errors.root?.server?.message} />
-        <SubmitButton pending={isSubmitting}>Send code</SubmitButton>
+        <SubmitButton pending={isSubmitting}>Continue</SubmitButton>
       </form>
     </AuthLayout>
   );

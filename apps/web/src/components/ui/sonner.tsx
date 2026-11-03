@@ -2,12 +2,13 @@
 
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
+import { useTheme } from "@/lib/theme"
 
-// ponytail: follows the OS theme; no next-themes (a Next.js package) until there's a theme toggle
+// Our own theme store (lib/theme.ts) instead of next-themes, a Next.js package
 const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner
-      theme="system"
+      theme={useTheme()}
       className="toaster group"
       icons={{
         success: (

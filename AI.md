@@ -105,6 +105,9 @@ Who decided: **Me** (my call), **Me ← AI** (I accepted the AI's recommendation
 | 38 | Breach check on HIBP outage | fail closed / fail open | Fail open | Me ← AI | An outage of a third-party API must not block sign-up or reset |
 | 39 | Guessing limits | per code only / per code + per-account daily budget | Both | **Research** | Security review showed per-code limits reset with every new code |
 | 40 | Counting attempts | check, then increment / reserve atomically, then verify, refund on success | Reserve first | **Research** | Only the atomic version holds under parallel requests |
+| 41 | "Confirm password" on reset | keep / drop | Drop | **Research** | web.dev form guidance: the show-password toggle catches typos; typing it twice is friction |
+
+**UI decisions (42–48)** are in [docs/UI.md](docs/UI.md#ui-decisions).
 
 ## Build log
 
@@ -285,3 +288,6 @@ Each step records: **prompt → what AI generated → what I changed → how it 
   - 3 new tests (cross-code budget; 12 parallel sign-in reservations → exactly 5; 15 parallel code reservations → exactly 10)
   - **Mutation-checked:** removing the budget, the login limit or the code limit fails exactly the matching tests
   - full suite green (see the commit)
+
+### Steps 8–10: UI
+Moved to [docs/UI.md](docs/UI.md#ui-build-log): the UI refresh, the design reset (less "AI-looking") and the name, logo and theme toggle.

@@ -50,20 +50,17 @@ describe('codeSchema', () => {
   });
 
   it.each(['12345', '1234567', '12a456', ''])('rejects %j', (input) => {
-    expect(codeSchema.safeParse(input).error?.issues[0]?.message).toBe('Enter the 6-digit code');
+    expect(codeSchema.safeParse(input).error?.issues[0]?.message).toBe('Enter the full OTP');
   });
 });
 
 describe('resetPasswordSchema', () => {
-  it('flags a mismatched confirmation on the confirm field', () => {
-    const result = resetPasswordSchema.safeParse({
+  it('needs email, code and a policy-compliant password (no confirmation field)', () => {
+    expect(resetPasswordSchema.safeParse({ email: 'a@b.co', code: '123 456', password: 'Passw0rd!' }).data).toEqual({
       email: 'a@b.co',
       code: '123456',
       password: 'Passw0rd!',
-      confirm: 'Passw0rd?',
     });
-    expect(result.error?.issues.find((i) => i.path[0] === 'confirm')?.message).toBe(
-      'Passwords don’t match',
-    );
+    expect(resetPasswordSchema.safeParse({ email: 'a@b.co', code: '123456', password: 'weak' }).success).toBe(false);
   });
 });

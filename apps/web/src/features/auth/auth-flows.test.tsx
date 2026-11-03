@@ -32,6 +32,27 @@ describe('route guards', () => {
     expect(mockedApi.get).toHaveBeenCalledTimes(2);
   });
 
+  it('shows a not-found page with a way home for an unknown path', async () => {
+    mockedApi.get.mockRejectedValue(problem(401));
+    renderApp('/no-such-page');
+    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Go home' }).getAttribute('href')).toBe('/');
+  });
+
+  it('the theme switcher sets System, Light or Dark and remembers the choice', async () => {
+    mockedApi.get.mockRejectedValue(problem(401));
+    const { user } = renderApp('/signin');
+
+    expect((await screen.findByRole('button', { name: 'System theme' })).getAttribute('aria-pressed')).toBe('true');
+    await user.click(screen.getByRole('button', { name: 'Light theme' }));
+    expect(localStorage.getItem('theme')).toBe('light');
+    await user.click(screen.getByRole('button', { name: 'Dark theme' }));
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Dark theme' }).getAttribute('aria-pressed')).toBe('true');
+    await user.click(screen.getByRole('button', { name: 'System theme' }));
+    expect(localStorage.getItem('theme')).toBeNull(); // back to System
+  });
+
   it('sends a signed-in user away from the sign-in page', async () => {
     mockedApi.get.mockResolvedValue(ada);
     renderApp('/signin');
@@ -66,13 +87,13 @@ describe('sign in', () => {
   });
 });
 
-describe('log out', () => {
+describe('sign out', () => {
   it('ends the session and returns to sign in', async () => {
     mockedApi.get.mockResolvedValue(ada);
     mockedApi.post.mockResolvedValue(undefined);
     const { user } = renderApp('/');
 
-    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    await user.click(await screen.findByRole('button', { name: 'Sign out' }));
 
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeTruthy();
     expect(mockedApi.post).toHaveBeenCalledWith('/auth/logout');
