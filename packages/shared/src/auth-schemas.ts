@@ -28,7 +28,7 @@ export const OTP_LENGTH = 6;
 export const codeSchema = z
   .string()
   .transform((s) => s.replace(/\s/g, ''))
-  .pipe(z.string().regex(new RegExp(`^\\d{${OTP_LENGTH}}$`), `Enter the ${OTP_LENGTH}-digit code`));
+  .pipe(z.string().regex(new RegExp(`^\\d{${OTP_LENGTH}}$`), 'Enter the full OTP'));
 
 export const signUpSchema = z.object({
   email: emailSchema,
@@ -47,12 +47,9 @@ export const forgotPasswordSchema = z.object({ email: emailSchema });
 export const verifyEmailSchema = z.object({ code: codeSchema });
 
 // The email identifies whose code it is: codes are short and can repeat across users.
-export const resetPasswordSchema = z
-  .object({ email: emailSchema, code: codeSchema, password: passwordSchema, confirm: z.string() })
-  .refine((d) => d.password === d.confirm, {
-    path: ['confirm'],
-    message: 'Passwords don’t match',
-  });
+// No "confirm password" field: the show-password toggle catches typos, and
+// typing it twice is friction (web.dev sign-up/sign-in form guidance).
+export const resetPasswordSchema = z.object({ email: emailSchema, code: codeSchema, password: passwordSchema });
 
 export type SignUpInput = z.infer<typeof signUpSchema>;
 export type SignInInput = z.infer<typeof signInSchema>;

@@ -1,11 +1,14 @@
 node_modules/
 dist/
 coverage/
+test-results/
+playwright-report/
 .env
 *.log
 
-# local research notes (not part of the submission)
-docs/
+# local research notes (not part of the submission), except the UI decisions
+docs/*
+!docs/UI.md
 
 # local agent/editor launch config
 .claude/

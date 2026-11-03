@@ -18,7 +18,7 @@ const envSchema = z
     SMTP_PORT: z.coerce.number().int().positive().default(1025),
     SMTP_USER: z.string().optional(),
     SMTP_PASS: z.string().optional(),
-    MAIL_FROM: z.string().default('Auth Module <no-reply@auth-module.local>'),
+    MAIL_FROM: z.string().default('Application <no-reply@application.local>'),
   })
   .refine((env) => env.NODE_ENV !== 'production' || env.SMTP_HOST, {
     path: ['SMTP_HOST'],

@@ -1,7 +1,7 @@
 import { useWatch } from 'react-hook-form';
 import { Link } from 'react-router';
 import { FieldGroup } from '@/components/ui/field';
-import { AuthLayout } from '../components/AuthLayout';
+import { AuthLayout, authLinkClass } from '../components/AuthLayout';
 import { FormError, SubmitButton } from '../components/FormStatus';
 import { PasswordChecklist } from '../components/PasswordChecklist';
 import { PasswordInput } from '../components/PasswordInput';
@@ -20,20 +20,20 @@ export default function SignUpPage() {
   return (
     <AuthLayout
       title="Create an account"
-      description="Sign up with your email to get started."
+      description="It takes a minute. We’ll email you a code to confirm your address."
       footer={
         <p>
           Already have an account?{' '}
-          <Link to="/signin" className="text-foreground underline underline-offset-4">
+          <Link to="/signin" className={authLinkClass}>
             Sign in
           </Link>
         </p>
       }
     >
-      <form onSubmit={onSubmit} noValidate className="grid gap-5">
+      <form onSubmit={onSubmit} noValidate className="grid gap-6">
         <FieldGroup>
-          <TextField id="email" label="Email" type="email" autoComplete="email" error={errors.email} {...register('email')} />
           <TextField id="name" label="Name" autoComplete="name" error={errors.name} {...register('name')} />
+          <TextField id="email" label="Email" type="email" autoComplete="username" error={errors.email} {...register('email')} />
           <TextField
             id="password"
             label="Password"

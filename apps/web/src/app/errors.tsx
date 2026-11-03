@@ -1,20 +1,19 @@
 import { Link } from 'react-router';
 import { buttonVariants } from '@/components/ui/button';
+import { AuthLayout } from '@/features/auth/components/AuthLayout';
 
 function Message({ title, body }: { title: string; body: string }) {
   return (
-    <main className="flex min-h-svh flex-col items-center justify-center gap-3 p-4 text-center">
-      <h1 className="text-2xl font-medium">{title}</h1>
-      <p className="text-muted-foreground">{body}</p>
-      <Link to="/" className={buttonVariants({ variant: 'outline' })}>
+    <AuthLayout title={title} description={body}>
+      <Link to="/" className={buttonVariants({ className: 'h-9 w-full font-semibold' })}>
         Go home
       </Link>
-    </main>
+    </AuthLayout>
   );
 }
 
 export function NotFoundPage() {
-  return <Message title="Page not found" body="The page you’re looking for doesn’t exist." />;
+  return <Message title="Page not found" body="The page you’re looking for doesn’t exist or has moved." />;
 }
 
 /** Shown instead of a blank screen when a route throws. */

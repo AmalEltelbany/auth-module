@@ -6,7 +6,7 @@ import { Spinner } from '@/components/ui/spinner';
 export function FormError({ message }: { message?: string }) {
   if (!message) return null;
   return (
-    <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+    <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-sm text-destructive">
       {message}
     </p>
   );
@@ -15,7 +15,7 @@ export function FormError({ message }: { message?: string }) {
 /** Disabled while pending, so a double click can't submit twice. */
 export function SubmitButton({ pending, children }: { pending: boolean; children: ReactNode }) {
   return (
-    <Button type="submit" size="lg" className="w-full" disabled={pending}>
+    <Button type="submit" className="h-9 w-full text-sm font-semibold" disabled={pending}>
       {pending && <Spinner aria-hidden />}
       {children}
     </Button>

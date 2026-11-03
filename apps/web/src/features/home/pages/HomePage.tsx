@@ -1,15 +1,16 @@
-import { LogOutIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/features/auth/AuthProvider';
+import { AuthLayout } from '@/features/auth/components/AuthLayout';
 import { VerifyBanner } from '../components/VerifyBanner';
 
+/** The task's application page: the welcome message, who's signed in, and sign out. */
 export default function HomePage() {
   const auth = useAuth();
   const [signingOut, setSigningOut] = useState(false);
-  const user = auth.status === 'authenticated' ? auth.user : null;
+  if (auth.status !== 'authenticated') return null; // <RequireAuth> only renders us when signed in
+  const { user } = auth;
 
   async function signOut() {
     setSigningOut(true);
@@ -17,26 +18,21 @@ export default function HomePage() {
   }
 
   return (
-    <main className="flex min-h-svh items-center justify-center bg-muted/40 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>
-            <h1 className="text-2xl">Welcome to the application.</h1>
-          </CardTitle>
-          {user && (
-            <CardDescription>
-              Signed in as {user.name} ({user.email})
-            </CardDescription>
-          )}
-        </CardHeader>
-        <CardContent className="grid justify-items-start gap-4">
-          {user && !user.emailVerified && <VerifyBanner email={user.email} />}
-          <Button variant="outline" onClick={signOut} disabled={signingOut}>
-            {signingOut ? <Spinner aria-hidden /> : <LogOutIcon aria-hidden />}
-            Log out
-          </Button>
-        </CardContent>
-      </Card>
-    </main>
+    <AuthLayout
+      title="Welcome to the application."
+      description={
+        <>
+          You’re signed in as <span className="font-medium text-foreground">{user.name}</span> ({user.email}).
+        </>
+      }
+      aside={
+        <Button variant="outline" onClick={signOut} disabled={signingOut}>
+          {signingOut && <Spinner aria-hidden />}
+          Sign out
+        </Button>
+      }
+    >
+      {!user.emailVerified && <VerifyBanner email={user.email} />}
+    </AuthLayout>
   );
 }

@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import { FieldGroup } from '@/components/ui/field';
-import { AuthLayout } from '../components/AuthLayout';
+import { AuthLayout, authLinkClass } from '../components/AuthLayout';
 import { FormError, SubmitButton } from '../components/FormStatus';
 import { PasswordInput } from '../components/PasswordInput';
 import { TextField } from '../components/TextField';
@@ -20,15 +20,16 @@ export default function SignInPage() {
       footer={
         <p>
           New here?{' '}
-          <Link to="/signup" className="text-foreground underline underline-offset-4">
+          <Link to="/signup" className={authLinkClass}>
             Create an account
           </Link>
         </p>
       }
     >
-      <form onSubmit={onSubmit} noValidate className="grid gap-5">
+      <form onSubmit={onSubmit} noValidate className="grid gap-6">
         <FieldGroup>
-          <TextField id="email" label="Email" type="email" autoComplete="email" error={errors.email} {...register('email')} />
+          {/* autocomplete="username" on the email lets password managers pair it with the password. */}
+          <TextField id="email" label="Email" type="email" autoComplete="username" error={errors.email} {...register('email')} />
           <TextField
             id="password"
             label="Password"
@@ -36,7 +37,8 @@ export default function SignInPage() {
             autoComplete="current-password"
             error={errors.password}
             hint={
-              <Link to="/forgot-password" className="justify-self-end text-sm text-muted-foreground underline-offset-4 hover:underline">
+              // Field stretches every child to full width; shrink the link so its focus ring hugs the text.
+              <Link to="/forgot-password" className={`w-auto! self-end text-sm ${authLinkClass}`}>
                 Forgot password?
               </Link>
             }

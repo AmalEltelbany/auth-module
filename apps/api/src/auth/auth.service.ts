@@ -17,7 +17,7 @@ export type AuthResult = { user: User; accessToken: string; refreshToken: string
 
 // One message for wrong, used, expired and exhausted codes, and unknown emails:
 // no hint about which.
-const INVALID_CODE = 'This code is invalid or has expired. Request a new one.';
+const INVALID_CODE = 'This OTP is invalid or has expired. Request a new one.';
 // Per account, so a victim's inbox can't be flooded from many IPs.
 const MAIL_COOLDOWN_SECONDS = 60;
 // Per account, on top of the per-IP throttle: rotating IPs doesn't help guessing.

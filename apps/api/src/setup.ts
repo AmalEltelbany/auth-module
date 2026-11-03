@@ -11,7 +11,7 @@ export function configureApp(app: INestApplication): INestApplication {
   const document = SwaggerModule.createDocument(
     app,
     new DocumentBuilder()
-      .setTitle('Auth Module API')
+      .setTitle('Application API')
       .setDescription('Sign up, sign in and session endpoints. Errors use RFC 9457 problem details.')
       .setVersion('1.0')
       .addCookieAuth(ACCESS_COOKIE)

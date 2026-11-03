@@ -1,17 +1,14 @@
-import { MailIcon } from 'lucide-react';
 import { Link } from 'react-router';
-import { buttonVariants } from '@/components/ui/button';
+import { authLinkClass } from '@/features/auth/components/AuthLayout';
+import { cn } from '@/lib/utils';
 
-export function VerifyBanner({ email }: { email: string }) {
+export function VerifyBanner({ email, className }: { email: string; className?: string }) {
   return (
-    <div role="status" className="flex items-start gap-3 rounded-lg bg-muted px-3 py-2.5 text-sm">
-      <MailIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
-      <p className="flex-1">
-        Please confirm your email address. We sent a 6-digit code to <strong>{email}</strong>.
-      </p>
-      <Link to="/verify-email" className={buttonVariants({ variant: 'link', size: 'sm', className: 'h-auto p-0' })}>
-        Enter code
+    <p role="status" className={cn('rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm', className)}>
+      Please confirm your email address. We sent an OTP to <span className="font-medium">{email}</span>.{' '}
+      <Link to="/verify-email" className={authLinkClass}>
+        Enter OTP
       </Link>
-    </div>
+    </p>
   );
 }
