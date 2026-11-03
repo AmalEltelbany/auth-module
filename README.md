@@ -1,6 +1,6 @@
-# Auth Module
+# Application
 
-Sign up, sign in and a protected welcome page, plus email verification and password reset with one-time codes, built with **NestJS 12 + MongoDB** and **React 19 + TypeScript**.
+Application (repo: `auth-module`). Sign up, sign in and a protected welcome page, plus email verification and password reset with one-time codes, built with **NestJS 12 + MongoDB** and **React 19 + TypeScript**.
 
 ```
 apps/api         NestJS API (auth, users, sessions, mail)
@@ -34,13 +34,14 @@ npm run dev -w @auth-module/web            # http://localhost:5173
 | http://localhost:8025 | **Mailpit**, the inbox that catches every email (verification and reset codes) |
 | http://localhost:3001/api/docs | Swagger / OpenAPI |
 
-Try it: sign up → you land on **"Welcome to the application."** with a banner → **Enter code** → copy the 6-digit code from Mailpit → verified. Then log out → **Forgot password?** → code from Mailpit → new password.
+Try it: sign up → you land on **"Welcome to the application."** with a banner → **Enter OTP** → copy the OTP from Mailpit → verified. Then log out → **Forgot password?** → OTP from Mailpit → **Continue** → new password.
 
 ## Scripts (from the repo root)
 
 | Command | Does |
 |---|---|
-| `npm test` | shared unit tests, API e2e tests against an in-memory Mongo replica set, web component tests |
+| `npm test` | unit and integration tests: shared, API (in-memory Mongo replica set), web (real route table, network mocked) |
+| `npm run test:e2e` | Playwright in Chromium against the running stack. Needs `docker compose up`; starts the API and web dev servers if they aren't running. First time: `npx playwright install chromium` |
 | `npm run typecheck` | `tsc` in every package |
 | `npm run lint` | oxlint |
 | `npm run build` | builds shared, API and web |
@@ -99,9 +100,11 @@ Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details. V
 
 ## Testing
 
-- **shared:** schemas and password rules, table-driven
-- **API:** end-to-end with supertest against a real `MongoMemoryReplSet`. Mail and the breach check are replaced by fakes, and tests read codes from the recorded mail.
-- **web:** Testing Library rendering the real route table with only the network mocked
+| Layer | What | Where |
+|---|---|---|
+| **Unit** | shared schemas and password rules (table-driven); the OTP service against a real in-memory Mongo (HMAC storage, single use, 5-attempt limit, expiry, parallel races); the breach check; the web's theme store and form-error helpers | `packages/shared/src/*.test.ts`, `apps/api/src/**/*.test.ts`, `apps/web/src/lib/*.test.ts` |
+| **Integration** | **API:** every endpoint over HTTP with supertest against a real `MongoMemoryReplSet`, mail and the breach check replaced by fakes, codes read from the recorded mail. **Web:** Testing Library rendering the real route table with only `lib/api.ts` mocked: forms, guards, the OTP input, the resend countdown, the two reset steps, show/hide password | `apps/api/test/`, `apps/web/src/**/*.test.tsx` |
+| **End-to-end** | Playwright in Chromium against the real web, API, Mongo and Mailpit: sign up, verify with the OTP from Mailpit, check the session is httpOnly-only, sign out, reset (a wrong OTP, then the right one), the old password fails and the new one works; plus guards and 404 | `e2e/` |
 
 **Pinned tests** guard the security decisions above. Each was checked by temporarily breaking the protection it covers and watching exactly that test fail.
 
