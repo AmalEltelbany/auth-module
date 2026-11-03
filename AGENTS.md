@@ -1,4 +1,4 @@
-# Auth Module — Agent Instructions
+# Application (auth-module) — Agent Instructions
 
 Full-stack auth module: sign up, sign in, protected page, email verification and password reset. NestJS 12 + MongoDB API and a React 19 + TypeScript web app, in an npm workspaces monorepo.
 
@@ -102,7 +102,7 @@ const copy = structuredClone(obj);
 
 - Platform first: `structuredClone`, `Object.groupBy`, `BroadcastChannel`, `fetch`, native input attributes.
 - State why a new dependency earns its place in the commit message.
-- Considered and rejected, so don't add them without a reason: helmet, cookie-parser, dotenv (`process.loadEnvFile()`), next-themes (shadcn's sonner adds it; ours follows the OS theme), pino, terminus, `@nestjs/config`, msw, jest-dom, axe, jsx-a11y-x, lodash, Redux/Zustand, TanStack Query.
+- Considered and rejected, so don't add them without a reason: helmet, cookie-parser, dotenv (`process.loadEnvFile()`), next-themes (shadcn's sonner adds it; `lib/theme.ts` does the job in ~40 lines), pino, terminus, `@nestjs/config`, msw, jest-dom, axe, jsx-a11y-x, lodash, Redux/Zustand, TanStack Query.
 
 ## Simplifications
 
@@ -270,7 +270,7 @@ await this.users.create({ email, ... });
 | POST | `/auth/verify-email` `{ code }` | protected (verifies the signed-in user), 10 / 15 min |
 | POST | `/auth/verify-email/resend` | protected, 3 / 15 min |
 | POST | `/auth/forgot-password` `{ email }` | public, always 202, 10 / 15 min |
-| POST | `/auth/reset-password` `{ email, code, password, confirm }` | public, 10 / 15 min |
+| POST | `/auth/reset-password` `{ email, code, password }` | public, 10 / 15 min |
 | GET | `/users/me` | protected |
 | GET | `/health` | public |
 
@@ -356,6 +356,10 @@ const checks = passwordRules.map(r => ({ label: r.label, ok: r.test(pw) }));
 - shadcn on **Radix**. Add components with `npx shadcn@latest add <name>`. Edit the copies in `components/ui/` only for project-wide changes.
 - Forms use `Field` / `FieldLabel` / `FieldError` (shadcn's `Form` no longer exists).
 - Toasts: `sonner`, for "password changed", "email sent" and network errors. Field errors stay inline, never as toasts.
+- **Every page uses `AuthLayout`** (the "Application" logo (Lucide `layers` on a near-black tile) top-left, the System / Light / Dark segmented theme switcher top-right, one narrow centered column with no card, a small © footer): auth pages, home, 404 and the route error. Don't add a second page frame.
+- Theme: System / Light / Dark via `lib/theme.ts` (a `.dark` class on `<html>`; the preference is the only thing in `localStorage`). The inline script in `index.html` applies it before first paint: change both together.
+- Look (inspired by Tally's sign-in page, nothing of its brand): plain white page, no card, bold centered title, 36px controls, **near-black** main button and logo tile (`primary`), **one indigo accent** (`text-link`, `ring`) for links and focus. No gradients, glows, images or icon tiles.
+- Forms: labels above inputs, no placeholder as label, no "confirm password" field (the show-password toggle covers typos). Use "Sign in" / "Sign out" consistently.
 - Colors come from tokens only:
 
 ```tsx
@@ -369,8 +373,11 @@ const checks = passwordRules.map(r => ({ label: r.label, ok: r.test(pw) }));
 ## Accessibility
 
 - Every input has a `<label>`, `aria-invalid`, and `aria-describedby` pointing at its error.
-- Use the correct `autocomplete`: `email`, `name`, `new-password` (sign up, reset), `current-password` (sign in).
+- Use the correct `autocomplete`: `username` on the email field (so password managers pair it), `name`, `new-password` (sign up, reset), `current-password` (sign in).
 - The password checklist uses `aria-live="polite"`. Focus moves to the first invalid field on submit.
+- OTP entry uses `OtpField`: one box per digit drawn over **one real input** (not six), so screen readers hear one field and paste / `one-time-code` autofill work. In the UI it's called "OTP", never "6-digit code".
+- Reset password is two steps on one page (OTP → **Confirm** → new password → **Reset password**) sent as **one** request. The title stays "Reset password"; the line under it changes per step, and "Go back" sits above it. A rejected OTP (`isOtpRejected` in `lib/form-errors.ts`) sends the user back to the OTP step.
+- OTP error state (wording and errors follow Revenew's flow): the server's message goes **under the boxes** (red), not above the button, and clears as soon as the OTP is edited. `ResendOtp` sits under the boxes: "Resend OTP in 0:59", then a "Resend OTP" link (60 s, the API's mail cooldown).
 
 ## Don't
 
@@ -390,7 +397,7 @@ const checks = passwordRules.map(r => ({ label: r.label, ok: r.test(pw) }));
 | API unit | Vitest + real in-memory Mongo | `AuthService`: hashing, lockout, rotation, reuse detection |
 | API e2e | supertest + `MongoMemoryReplSet` | every endpoint, including at least one error case |
 | Web | Vitest + jsdom + Testing Library | forms, guards, `lib/api.ts` |
-| End-to-end (optional) | Playwright | one happy path through real cookies |
+| End-to-end | Playwright (`e2e/`, `npm run test:e2e`) | the full journey in Chromium against the real web, API, Mongo and Mailpit: sign up → OTP from Mailpit → verify → sign out → reset (wrong OTP, then right) → sign in; plus guards and 404. Not part of `npm test`: needs `docker compose up` and a current API build |
 
 ## Rules
 
@@ -424,6 +431,7 @@ it.each([
 
 - Adding cases to an existing test file? Keep the existing cases. Delete one only when the code it covers is deleted.
 - Don't chase a coverage percentage. Cover the rules and the flows.
+- Browser e2e reads OTPs from Mailpit's API (`/api/v1/search`, the code is the subject's first word) and uses a fresh `e2e+<timestamp>@example.com` account per run. Never point it at real mail.
 
 ## Pinned tests
 
