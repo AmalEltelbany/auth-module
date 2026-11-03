@@ -12,9 +12,11 @@ packages/shared  zod schemas and password rules used by BOTH apps
 
 Tokens stay in two httpOnly cookies. `apps/web` posts to `/api` with `credentials: 'include'`. The Nest API sets `__Host-access_token` (15 min) and `__Host-refresh_token` (7 days), and `AuthService` decides lockout, rotation, and one-time codes. Users, sessions, and codes are separate writers into one MongoDB replica set. Mail and the Have I Been Pwned range API sit outside that process: signup does not wait for mail, and a breached-password check fails open.
 
+![Auth module architecture: the React app calls the Nest API, AuthService writes users, sessions and codes to MongoDB, and mail and HIBP sit outside the process](docs/architecture.png)
+
 ![Auth module system design: the request sets httpOnly cookies, Mongo stores hashes rather than secrets, and password reset spends the code before the transaction](docs/system-design.png)
 
-Open [the interactive map](.archify/2026-11-03-auth-module/auth-module.architecture.html) in a browser to follow a node back to the file that implements it. The drawing above is the same design, argued in three bands.
+The map is the runtime shape. The drawing under it is the same design, argued in three bands.
 
 **Request.** React calls the API. The controller writes the cookies, and page scripts leave them alone. On a 401 from a protected call, the web app refreshes once, and every caller in that moment shares that one refresh. A second presentation of the same refresh token revokes the family.
 
