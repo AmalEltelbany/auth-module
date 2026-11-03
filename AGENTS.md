@@ -36,7 +36,7 @@ API (`apps/api/.env`, documented in `.env.example`):
 - `MONGO_URI`: must point at a replica set (transactions)
 - `JWT_ACCESS_SECRET`: signs access tokens
 - `APP_URL`: public web origin; every email link is built from it
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`: if `SMTP_HOST` is empty, mail is logged instead of sent
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`: if `SMTP_HOST` is empty, mail is logged instead of sent. That's development only; config refuses to boot in production without `SMTP_HOST`.
 
 Web: none. It calls the relative path `/api`, proxied by Vite in dev and nginx in prod.
 
@@ -170,7 +170,7 @@ await api.post('/auth/signin', body); // credentials: 'include' in lib/api.ts
 
 ## Never log
 
-Passwords, password hashes, raw tokens, full email links, cookies, or `Authorization` headers. Log `userId`, the event and the IP.
+Passwords, password hashes, raw tokens, full email links, cookies, or `Authorization` headers. Log `userId`, the event and the IP. The one exception is the dev-only mail log when `SMTP_HOST` is empty, which production config makes impossible.
 
 ## Never
 

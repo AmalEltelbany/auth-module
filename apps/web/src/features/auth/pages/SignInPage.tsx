@@ -35,6 +35,11 @@ export default function SignInPage() {
             as={PasswordInput}
             autoComplete="current-password"
             error={errors.password}
+            hint={
+              <Link to="/forgot-password" className="justify-self-end text-sm text-muted-foreground underline-offset-4 hover:underline">
+                Forgot password?
+              </Link>
+            }
             {...register('password')}
           />
         </FieldGroup>

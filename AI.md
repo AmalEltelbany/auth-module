@@ -48,6 +48,7 @@
 | Vite template pinned TypeScript `~7.0.2` | Would break the TS 6 pin the Nest tooling needs | Reviewed the generated `package.json` before installing | Removed it; the web app uses the root TS 6.0 |
 | shadcn's `sonner.tsx` imports `next-themes` | A stale Next.js package we had rejected, added silently | Read the generated component | Removed; toasts follow the OS theme |
 | Web tests: all 10 failed | jsdom has no `window.matchMedia`, which sonner calls | Test run | Small stub in the test setup |
+| 429s showed "ThrottlerException: Too Many Requests" | The library's internal message would have reached users on the forgot-password form | Tripped the limit with curl while building the page | Problem filter gives 429s a human `detail` |
 | Refresh cookie as `__Secure-` with `Path=/api/auth` (decision 24) | `__Secure-` allows a `Domain` attribute, so a sibling subdomain could plant its own refresh token ("cookie tossing") and sign a victim into the attacker's account | Automated security review of the step 4 commit | `__Host-refresh_token`, `Path=/`; e2e asserts no `Domain` |
 | `refresh()` ignored `sessionVersion` | A refresh token issued before a password reset could have minted fresh access tokens afterwards, bypassing "sign out everywhere" (latent: nothing bumped the version yet) | Automated security review of the uncommitted step 4 | Each session row stores the version it was issued under; refresh rejects a mismatch and revokes the family. New pinned test, mutation-checked |
 | First mutation run "skipped" all 17 tests | Running vitest from `apps/api` made mongodb-memory-server download mongod into `~/.cache`; the timeout killed it, leaving a broken 950 KB binary (`spawn EFTYPE`) | Read the actual error instead of trusting "skipped" | Deleted the broken files; pinned `MONGOMS_DOWNLOAD_DIR` in the vitest config |
@@ -85,6 +86,10 @@ Who decided: **Me** (my call), **Me ← AI** (I accepted the AI's recommendation
 | 25 | Logout scope | this device / all devices | This device (revokes its family) | Me ← AI | Logging out on a phone shouldn't sign out the laptop; "all devices" comes with password reset |
 | 26 | Parallel refresh with the same token | grace window / strict single-use + single-flight client | Strict + single-flight | Me ← AI | No window in which a stolen token works; the client guarantees one refresh at a time |
 | 27 | How to prove pinned tests | trust them / break the guarded code once | Mutation check | Me ← AI | Both pinned tests failed with the protection removed and passed with it restored |
+| 28 | Email format | HTML templates (library) / plain text | Plain text | Me ← AI | Three short transactional messages; Mailpit and every client render them; no template dependency |
+| 29 | SMTP missing | log mail everywhere / log in dev, refuse to boot in production | Dev-only logging | Me ← AI | Losing reset emails silently in production is worse than a failed deploy |
+| 30 | Per-account mail limit | in-memory counter / "token issued in the last 60 s?" from Mongo | Mongo query | Me ← AI | Works across instances, zero new code paths; the IP throttle covers bursts |
+| 31 | Where verify/reset logic lives | new `RecoveryService` / `AuthService` | `AuthService` | Me ← AI | One cohesive auth service; split it if it grows further |
 
 ## Build log
 
@@ -192,3 +197,36 @@ Each step records: **prompt → what AI generated → what I changed → how it 
     - signed in, then invalidated every access token by rotating the API's JWT secret and restarting it
     - reloading showed `me 401, me 401 → refresh 200 (once) → me 200, me 200`, and the user stayed signed in
     - after logout, the browser's refresh cookie got 401: revoked on the server
+
+### Step 5: email verification and password reset
+- **Prompt:** "Start step 5"
+- **Generated:**
+  - **API:**
+    - `MailService`: nodemailer, plain text, logs instead of sending without SMTP in development; production config requires SMTP
+    - a one-time-token store: sha256 only, single atomic consume, older links deleted on reissue, TTL index
+    - `POST /auth/verify-email`, `/verify-email/resend` (signed in, 3 per 15 min), `/forgot-password` (always 202, all work deferred until after the response), `/reset-password`
+    - reset runs in **one Mongo transaction**: consume token, new hash plus `sessionVersion++`, mark email verified, delete reset tokens, revoke every session; then a "password changed" email
+    - a 60 s per-account mail cooldown
+  - **Web:** lazy-loaded verify, forgot and reset pages. A `useLinkToken` hook reads `#token` once and strips it from the URL. The verify page **only sends after a click**. The reset page has the password checklist and a confirmation field. Also: a verify banner with resend on home, and "Forgot password?" on sign-in.
+  - **Docker:** Mailpit, on localhost only.
+  - **Tests:** 10 API e2e tests with a **recording mail fake** (they follow the real links the API builds), and 9 web tests.
+- **Changed:**
+  - Mutation-checked 2 more pinned tests:
+    - removing `sessionVersion++` from `setPassword` fails the reset test
+    - making the verify page auto-submit fails the no-auto-POST test
+  - The raw throttler message on 429s would have reached users (see Corrections).
+  - Bumped the Mailpit pin from 1.29 to 1.33 after its own API reported a newer release.
+  - Deleted the temp files holding real link tokens after the browser run.
+- **Verified:**
+  - lint, typecheck, build: clean
+  - `npm test`: shared 25, API 28, web 23, so **76/76**
+  - Lazy pages cut the main bundle from 163 to 117 kB gzipped.
+  - **End to end in a real browser, with real SMTP into Mailpit:**
+    - sign-up, then the verification email arrives, built from `APP_URL`, with a 43-character token in the `#fragment`
+    - opening the link sends **0 requests** and strips the token from the URL
+    - the click shows "Email confirmed", and the banner disappears
+    - forgot-password shows the generic "Check your email", and the reset email arrives
+    - a new password is set, then the app redirects to `/signin`
+    - a second device (curl) gets 401 on both access and refresh
+    - old password 401, new password 200, reusing the link 400
+    - the "Your password was changed" email arrives

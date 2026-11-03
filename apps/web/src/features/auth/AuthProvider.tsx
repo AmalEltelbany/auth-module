@@ -12,6 +12,8 @@ type AuthValue = AuthState & {
   signUp: (input: SignUpInput) => Promise<void>;
   signIn: (input: SignInInput) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Re-reads the user, e.g. after verifying the email. */
+  reloadUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthValue | null>(null);
@@ -39,13 +41,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // While signed in, coming back to the tab re-checks the session (it may have
-  // expired meanwhile). Signed out, there is nothing to re-check.
+  // expired, or the email been verified in another tab). Signed out, there is
+  // nothing to re-check.
   const signedIn = state.status === 'authenticated';
   useEffect(() => {
     if (!signedIn) return;
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
-      api.get<User>('/users/me').catch(() => setState({ status: 'unauthenticated' }));
+      api
+        .get<User>('/users/me')
+        .then((user) => setState({ status: 'authenticated', user }))
+        .catch(() => setState({ status: 'unauthenticated' }));
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
@@ -65,6 +71,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await api.post('/auth/logout').catch(() => {}); // the session ends locally either way
       setState({ status: 'unauthenticated' });
       new BroadcastChannel('auth').postMessage('logout');
+    },
+    async reloadUser() {
+      const user = await api.get<User>('/users/me');
+      setState({ status: 'authenticated', user });
     },
   };
 

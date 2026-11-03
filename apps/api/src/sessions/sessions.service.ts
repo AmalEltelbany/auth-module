@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import type { Model } from 'mongoose';
+import type { ClientSession, Model } from 'mongoose';
 import { SessionRecord } from './session.schema.js';
 
 export const REFRESH_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -70,6 +70,11 @@ export class SessionsService {
   async revoke(raw: string): Promise<void> {
     const session = await this.sessions.findOne({ tokenHash: hash(raw) }).exec();
     if (session) await this.revokeFamily(session.familyId);
+  }
+
+  /** Every device, e.g. after a password reset. */
+  async revokeAllForUser(userId: string, session?: ClientSession): Promise<void> {
+    await this.sessions.updateMany({ userId, revokedAt: null }, { revokedAt: new Date() }, { session }).exec();
   }
 
   async revokeFamily(familyId: string): Promise<void> {

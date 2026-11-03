@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { useAuth } from '@/features/auth/AuthProvider';
+import { VerifyBanner } from '../components/VerifyBanner';
 
 export default function HomePage() {
   const auth = useAuth();
@@ -28,7 +29,8 @@ export default function HomePage() {
             </CardDescription>
           )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid justify-items-start gap-4">
+          {user && !user.emailVerified && <VerifyBanner email={user.email} />}
           <Button variant="outline" onClick={signOut} disabled={signingOut}>
             {signingOut ? <Spinner aria-hidden /> : <LogOutIcon aria-hidden />}
             Log out

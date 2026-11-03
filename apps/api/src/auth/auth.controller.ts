@@ -1,8 +1,10 @@
 import { Body, Controller, Cookies, Headers, HttpCode, Post, Res } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import {
+  ApiAcceptedResponse,
   ApiBadRequestResponse,
   ApiConflictResponse,
+  ApiCookieAuth,
   ApiCreatedResponse,
   ApiNoContentResponse,
   ApiOkResponse,
@@ -12,13 +14,19 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import {
+  type ForgotPasswordInput,
+  forgotPasswordSchema,
+  type ResetPasswordInput,
+  resetPasswordSchema,
   type SignInInput,
   type SignUpInput,
   signInSchema,
   signUpSchema,
+  type VerifyEmailInput,
+  verifyEmailSchema,
 } from '@auth-module/shared/auth-schemas';
 import type { User } from '@auth-module/shared/types';
-import { Public } from '../common/decorators.js';
+import { CurrentUser, Public } from '../common/decorators.js';
 import { ACCESS_COOKIE, accessCookieOptions, REFRESH_COOKIE, refreshCookieOptions } from './auth.cookies.js';
 import { type AuthResult, AuthService } from './auth.service.js';
 
@@ -84,6 +92,42 @@ export class AuthController {
   async logout(@Cookies(REFRESH_COOKIE) refreshToken: string | undefined, @Res({ passthrough: true }) res: unknown) {
     await this.auth.logout(refreshToken);
     this.clearSession(res);
+  }
+
+  @Public()
+  @Post('verify-email')
+  @HttpCode(204)
+  @ApiNoContentResponse({ description: 'Email verified' })
+  @ApiBadRequestResponse({ description: 'Link invalid, used or expired' })
+  async verifyEmail(@Body({ schema: verifyEmailSchema }) body: VerifyEmailInput): Promise<void> {
+    await this.auth.verifyEmail(body.token);
+  }
+
+  @Post('verify-email/resend')
+  @HttpCode(202)
+  @Throttle({ default: { limit: 3, ttl: 15 * 60_000 } })
+  @ApiCookieAuth()
+  @ApiAcceptedResponse({ description: 'A new link was sent (no-op if already verified)' })
+  async resendVerification(@CurrentUser() user: User): Promise<void> {
+    await this.auth.resendVerification(user);
+  }
+
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(202)
+  @Throttle({ default: { limit: 10, ttl: 15 * 60_000 } }) // per IP; per account there's a 60 s mail cooldown
+  @ApiAcceptedResponse({ description: 'Always 202, whether or not the email is registered' })
+  forgotPassword(@Body({ schema: forgotPasswordSchema }) body: ForgotPasswordInput): void {
+    this.auth.forgotPassword(body.email);
+  }
+
+  @Public()
+  @Post('reset-password')
+  @HttpCode(204)
+  @ApiNoContentResponse({ description: 'Password changed; every device signed out' })
+  @ApiBadRequestResponse({ description: 'Invalid fields, or link invalid, used or expired' })
+  async resetPassword(@Body({ schema: resetPasswordSchema }) body: ResetPasswordInput): Promise<void> {
+    await this.auth.resetPassword(body);
   }
 
   private startSession(res: unknown, { user, accessToken, refreshToken }: AuthResult): User {

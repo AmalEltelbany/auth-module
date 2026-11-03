@@ -5,7 +5,7 @@ import { Test } from '@nestjs/testing';
 import type { Model } from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const ACCESS_COOKIE = '__Host-access_token';
 const REFRESH_COOKIE = '__Host-refresh_token';
@@ -14,6 +14,29 @@ const valid = { email: 'Ada@Example.com', name: 'Ada Lovelace', password: 'Passw
 let app: INestApplication;
 let replSet: MongoMemoryReplSet;
 let http: ReturnType<typeof request>;
+
+// Records mail instead of sending it, so tests can follow the links the API built.
+type Mail = { kind: 'verify' | 'reset' | 'changed'; to: string; link?: string };
+const outbox: Mail[] = [];
+const recordingMail = {
+  sendVerification: async (to: string, _name: string, link: string) => void outbox.push({ kind: 'verify', to, link }),
+  sendPasswordReset: async (to: string, link: string) => void outbox.push({ kind: 'reset', to, link }),
+  sendPasswordChanged: async (to: string) => void outbox.push({ kind: 'changed', to }),
+};
+const mailsTo = (to: string, kind: Mail['kind']) => outbox.filter((m) => m.to === to && m.kind === kind);
+
+/** Waits for the (fire-and-forget) mail, then returns the token from its link. */
+async function tokenFromMail(to: string, kind: 'verify' | 'reset'): Promise<string> {
+  const mail = await vi.waitFor(() => {
+    const last = mailsTo(to, kind).at(-1);
+    if (!last) throw new Error(`no ${kind} mail to ${to} yet`);
+    return last;
+  });
+  return new URL(mail.link!).hash.replace('#token=', '');
+}
+
+/** Lets fire-and-forget work finish, for asserting that nothing was sent. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
 
 /** The full Set-Cookie header for `name`. */
 function setCookie(res: request.Response, name: string): string {
@@ -42,8 +65,12 @@ beforeAll(async () => {
   // Imported after the env is set: config.ts parses it on first import.
   const { AppModule } = await import('../src/app.module.js');
   const { configureApp } = await import('../src/setup.js');
+  const { MailService } = await import('../src/mail/mail.service.js');
 
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(MailService)
+    .useValue(recordingMail)
+    .compile();
   app = configureApp(moduleRef.createNestApplication());
   await app.init();
   http = request(app.getHttpServer());
@@ -180,6 +207,114 @@ describe('refresh tokens', () => {
 
     await http.post('/api/auth/refresh').set('Cookie', thisDevice.refresh).expect(401);
     await http.post('/api/auth/refresh').set('Cookie', otherDevice.refresh).expect(200);
+  });
+});
+
+async function signUpAs(email: string, password = 'Passw0rd!') {
+  const res = await http.post('/api/auth/signup').send({ email, name: 'Test User', password }).expect(201);
+  return { access: cookie(res, ACCESS_COOKIE), refresh: cookie(res, REFRESH_COOKIE) };
+}
+
+describe('email verification', () => {
+  it('sign-up emails a link built from APP_URL, with the token in the #fragment', async () => {
+    await signUpAs('grace@example.com');
+    await tokenFromMail('grace@example.com', 'verify');
+    expect(mailsTo('grace@example.com', 'verify')[0]!.link).toMatch(/^http:\/\/localhost:5173\/verify-email#token=[\w-]{43}$/);
+  });
+
+  it('verifies exactly once', async () => {
+    const { access } = await signUpAs('hopper@example.com');
+    const token = await tokenFromMail('hopper@example.com', 'verify');
+
+    await http.post('/api/auth/verify-email').send({ token }).expect(204);
+    expect((await http.get('/api/users/me').set('Cookie', access)).body.emailVerified).toBe(true);
+
+    const reuse = await http.post('/api/auth/verify-email').send({ token }).expect(400);
+    expect(reuse.body.detail).toBe('This link is invalid or has expired. Request a new one.');
+  });
+
+  it('rejects an unknown token with the same message', async () => {
+    const res = await http.post('/api/auth/verify-email').send({ token: 'made-up' }).expect(400);
+    expect(res.body.detail).toBe('This link is invalid or has expired. Request a new one.');
+  });
+
+  it('resend needs a session, and sends nothing once verified', async () => {
+    await http.post('/api/auth/verify-email/resend').expect(401);
+
+    const { access } = await signUpAs('lamarr@example.com');
+    await http.post('/api/auth/verify-email').send({ token: await tokenFromMail('lamarr@example.com', 'verify') });
+    await http.post('/api/auth/verify-email/resend').set('Cookie', access).expect(202);
+    await settle();
+    expect(mailsTo('lamarr@example.com', 'verify')).toHaveLength(1);
+  });
+
+  it('resend (after the cooldown) issues a new link and kills the old one', async () => {
+    const { access } = await signUpAs('turing@example.com');
+    const first = await tokenFromMail('turing@example.com', 'verify');
+    // Age the first link past the 60 s per-account cooldown (native driver: createdAt is immutable in Mongoose).
+    const tokens = app.get<Model<unknown>>(getModelToken('OneTimeTokenRecord'));
+    await tokens.collection.updateMany({}, { $set: { createdAt: new Date(Date.now() - 120_000) } });
+
+    await http.post('/api/auth/verify-email/resend').set('Cookie', access).expect(202);
+    await vi.waitFor(() => expect(mailsTo('turing@example.com', 'verify')).toHaveLength(2));
+    const second = await tokenFromMail('turing@example.com', 'verify');
+
+    await http.post('/api/auth/verify-email').send({ token: first }).expect(400);
+    await http.post('/api/auth/verify-email').send({ token: second }).expect(204);
+  });
+});
+
+describe('password reset', () => {
+  // Pinned: forgot-password returns 202 for unknown emails and when throttled.
+  it('forgot-password answers 202 for an unknown email and sends nothing', async () => {
+    await http.post('/api/auth/forgot-password').send({ email: 'nobody@example.com' }).expect(202);
+    await settle();
+    expect(mailsTo('nobody@example.com', 'reset')).toHaveLength(0);
+  });
+
+  it('a second request within the cooldown still answers 202 but sends nothing', async () => {
+    await signUpAs('knuth@example.com');
+    await http.post('/api/auth/forgot-password').send({ email: 'knuth@example.com' }).expect(202);
+    await tokenFromMail('knuth@example.com', 'reset');
+
+    await http.post('/api/auth/forgot-password').send({ email: 'KNUTH@example.com' }).expect(202);
+    await settle();
+    expect(mailsTo('knuth@example.com', 'reset')).toHaveLength(1);
+  });
+
+  // Pinned: after a reset, old sessions and the old password fail.
+  it('resets the password, signs out every device, and the link works once', async () => {
+    const laptop = await signUpAs('liskov@example.com', 'Old-pass1!');
+    const phone = await http.post('/api/auth/signin').send({ email: 'liskov@example.com', password: 'Old-pass1!' }).expect(200);
+    await http.post('/api/auth/forgot-password').send({ email: 'liskov@example.com' }).expect(202);
+    const token = await tokenFromMail('liskov@example.com', 'reset');
+
+    await http.post('/api/auth/reset-password').send({ token, password: 'New-pass1!', confirm: 'New-pass1!' }).expect(204);
+
+    await http.get('/api/users/me').set('Cookie', laptop.access).expect(401); // old access token
+    await http.post('/api/auth/refresh').set('Cookie', laptop.refresh).expect(401); // old refresh, device 1
+    await http.post('/api/auth/refresh').set('Cookie', cookie(phone, REFRESH_COOKIE)).expect(401); // device 2
+    await http.post('/api/auth/signin').send({ email: 'liskov@example.com', password: 'Old-pass1!' }).expect(401);
+    const fresh = await http.post('/api/auth/signin').send({ email: 'liskov@example.com', password: 'New-pass1!' }).expect(200);
+    expect(fresh.body.emailVerified).toBe(true); // owning the inbox proves the address
+
+    await http.post('/api/auth/reset-password').send({ token, password: 'Other-pass1!', confirm: 'Other-pass1!' }).expect(400);
+    await vi.waitFor(() => expect(mailsTo('liskov@example.com', 'changed')).toHaveLength(1));
+  });
+
+  it('a mismatched confirmation fails on the confirm field and leaves the link usable', async () => {
+    await signUpAs('hamilton@example.com');
+    await http.post('/api/auth/forgot-password').send({ email: 'hamilton@example.com' }).expect(202);
+    const token = await tokenFromMail('hamilton@example.com', 'reset');
+
+    const res = await http.post('/api/auth/reset-password').send({ token, password: 'New-pass1!', confirm: 'New-pass2!' }).expect(400);
+    expect(res.body.errors).toEqual([{ path: 'confirm', message: 'Passwords don’t match' }]);
+    await http.post('/api/auth/reset-password').send({ token, password: 'New-pass1!', confirm: 'New-pass1!' }).expect(204);
+  });
+
+  it('rejects a weak new password with field errors', async () => {
+    const res = await http.post('/api/auth/reset-password').send({ token: 'x', password: 'weak', confirm: 'weak' }).expect(400);
+    expect(res.body.errors.map((e: { path: string }) => e.path)).toContain('password');
   });
 });
 
