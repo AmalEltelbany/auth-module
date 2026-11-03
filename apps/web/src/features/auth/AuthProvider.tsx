@@ -1,7 +1,12 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
 import type { SignInInput, SignUpInput } from '@auth-module/shared/auth-schemas';
 import type { User } from '@auth-module/shared/types';
-import { api, onSessionExpired } from '@/lib/api';
+import { ApiError, api, onSessionExpired } from '@/lib/api';
+
+// Only a 401 means "not signed in". An unreachable or restarting API (network
+// error, 5xx) is retried a few times instead of showing the sign-in page.
+const BOOT_RETRY_DELAYS_MS = [300, 1000, 3000];
+const isTransient = (error: unknown) => error instanceof ApiError && (error.status === 0 || error.status >= 500);
 
 type AuthState =
   | { status: 'loading' }
@@ -23,10 +28,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    api
-      .get<User>('/users/me')
-      .then((user) => active && setState({ status: 'authenticated', user }))
-      .catch(() => active && setState({ status: 'unauthenticated' }));
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const load = (attempt: number): void => {
+      api
+        .get<User>('/users/me')
+        .then((user) => active && setState({ status: 'authenticated', user }))
+        .catch((error: unknown) => {
+          if (!active) return;
+          const delay = BOOT_RETRY_DELAYS_MS[attempt];
+          if (isTransient(error) && delay !== undefined) retryTimer = setTimeout(() => load(attempt + 1), delay);
+          else setState({ status: 'unauthenticated' });
+        });
+    };
+    load(0);
 
     // Logging out in one tab logs out every tab.
     const channel = new BroadcastChannel('auth');
@@ -35,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onSessionExpired(() => setState({ status: 'unauthenticated' }));
     return () => {
       active = false;
+      clearTimeout(retryTimer);
       channel.close();
       unsubscribe();
     };

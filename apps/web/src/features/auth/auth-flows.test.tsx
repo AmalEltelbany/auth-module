@@ -24,6 +24,14 @@ describe('route guards', () => {
     expect(router.state.location.pathname).toBe('/signin');
   });
 
+  it('does not sign the user out when the API is briefly unreachable (502), it retries', async () => {
+    mockedApi.get.mockRejectedValueOnce(problem(502)).mockResolvedValue(ada);
+    const { router } = renderApp('/');
+    expect(await screen.findByRole('heading', { name: 'Welcome to the application.' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/');
+    expect(mockedApi.get).toHaveBeenCalledTimes(2);
+  });
+
   it('sends a signed-in user away from the sign-in page', async () => {
     mockedApi.get.mockResolvedValue(ada);
     renderApp('/signin');
