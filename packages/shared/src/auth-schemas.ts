@@ -12,7 +12,9 @@ export const nameSchema = z
   .string()
   .trim()
   .min(3, 'Name must be at least 3 characters')
-  .max(100, 'Name is too long');
+  .max(100, 'Name is too long')
+  // No newlines or other control characters: names end up in UIs and logs.
+  .regex(/^\P{Cc}*$/u, 'Name contains invalid characters');
 
 // Every failing rule is reported, so the UI can show them all at once.
 export const passwordSchema = passwordRules.reduce(
@@ -20,7 +22,13 @@ export const passwordSchema = passwordRules.reduce(
   z.string().max(PASSWORD_MAX_LENGTH, 'Password is too long'),
 );
 
-const tokenSchema = z.string().min(1, 'Missing token');
+export const OTP_LENGTH = 6;
+
+// The one-time code from the email. Spaces are tolerated ("123 456" pasted from a mail).
+export const codeSchema = z
+  .string()
+  .transform((s) => s.replace(/\s/g, ''))
+  .pipe(z.string().regex(new RegExp(`^\\d{${OTP_LENGTH}}$`), `Enter the ${OTP_LENGTH}-digit code`));
 
 export const signUpSchema = z.object({
   email: emailSchema,
@@ -36,10 +44,11 @@ export const signInSchema = z.object({
 
 export const forgotPasswordSchema = z.object({ email: emailSchema });
 
-export const verifyEmailSchema = z.object({ token: tokenSchema });
+export const verifyEmailSchema = z.object({ code: codeSchema });
 
+// The email identifies whose code it is: codes are short and can repeat across users.
 export const resetPasswordSchema = z
-  .object({ token: tokenSchema, password: passwordSchema, confirm: z.string() })
+  .object({ email: emailSchema, code: codeSchema, password: passwordSchema, confirm: z.string() })
   .refine((d) => d.password === d.confirm, {
     path: ['confirm'],
     message: 'Passwords don’t match',

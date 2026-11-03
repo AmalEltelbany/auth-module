@@ -94,20 +94,21 @@ export class AuthController {
     this.clearSession(res);
   }
 
-  @Public()
   @Post('verify-email')
   @HttpCode(204)
+  @Throttle({ default: { limit: 10, ttl: 15 * 60_000 } }) // per IP; each code also dies after 5 wrong tries
+  @ApiCookieAuth()
   @ApiNoContentResponse({ description: 'Email verified' })
-  @ApiBadRequestResponse({ description: 'Link invalid, used or expired' })
-  async verifyEmail(@Body({ schema: verifyEmailSchema }) body: VerifyEmailInput): Promise<void> {
-    await this.auth.verifyEmail(body.token);
+  @ApiBadRequestResponse({ description: 'Code wrong, used, expired or out of attempts' })
+  async verifyEmail(@CurrentUser() user: User, @Body({ schema: verifyEmailSchema }) body: VerifyEmailInput): Promise<void> {
+    await this.auth.verifyEmail(user, body.code);
   }
 
   @Post('verify-email/resend')
   @HttpCode(202)
   @Throttle({ default: { limit: 3, ttl: 15 * 60_000 } })
   @ApiCookieAuth()
-  @ApiAcceptedResponse({ description: 'A new link was sent (no-op if already verified)' })
+  @ApiAcceptedResponse({ description: 'A new code was sent (no-op if already verified)' })
   async resendVerification(@CurrentUser() user: User): Promise<void> {
     await this.auth.resendVerification(user);
   }
@@ -124,8 +125,9 @@ export class AuthController {
   @Public()
   @Post('reset-password')
   @HttpCode(204)
+  @Throttle({ default: { limit: 10, ttl: 15 * 60_000 } }) // per IP; each code also dies after 5 wrong tries
   @ApiNoContentResponse({ description: 'Password changed; every device signed out' })
-  @ApiBadRequestResponse({ description: 'Invalid fields, or link invalid, used or expired' })
+  @ApiBadRequestResponse({ description: 'Invalid fields, or code wrong, used, expired or out of attempts' })
   async resetPassword(@Body({ schema: resetPasswordSchema }) body: ResetPasswordInput): Promise<void> {
     await this.auth.resetPassword(body);
   }

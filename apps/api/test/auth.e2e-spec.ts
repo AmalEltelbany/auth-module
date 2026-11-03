@@ -15,25 +15,31 @@ let app: INestApplication;
 let replSet: MongoMemoryReplSet;
 let http: ReturnType<typeof request>;
 
-// Records mail instead of sending it, so tests can follow the links the API built.
-type Mail = { kind: 'verify' | 'reset' | 'changed'; to: string; link?: string };
+// Records mail instead of sending it, so tests can use the codes the API sent.
+type Mail = { kind: 'verify' | 'reset' | 'changed'; to: string; code?: string };
 const outbox: Mail[] = [];
 const recordingMail = {
-  sendVerification: async (to: string, _name: string, link: string) => void outbox.push({ kind: 'verify', to, link }),
-  sendPasswordReset: async (to: string, link: string) => void outbox.push({ kind: 'reset', to, link }),
+  sendVerificationCode: async (to: string, code: string) => void outbox.push({ kind: 'verify', to, code }),
+  sendPasswordResetCode: async (to: string, code: string) => void outbox.push({ kind: 'reset', to, code }),
   sendPasswordChanged: async (to: string) => void outbox.push({ kind: 'changed', to }),
 };
 const mailsTo = (to: string, kind: Mail['kind']) => outbox.filter((m) => m.to === to && m.kind === kind);
 
-/** Waits for the (fire-and-forget) mail, then returns the token from its link. */
-async function tokenFromMail(to: string, kind: 'verify' | 'reset'): Promise<string> {
+/** Waits for the (fire-and-forget) mail, then returns its code. */
+async function codeFromMail(to: string, kind: 'verify' | 'reset'): Promise<string> {
   const mail = await vi.waitFor(() => {
     const last = mailsTo(to, kind).at(-1);
     if (!last) throw new Error(`no ${kind} mail to ${to} yet`);
     return last;
   });
-  return new URL(mail.link!).hash.replace('#token=', '');
+  return mail.code!;
 }
+
+/** A code guaranteed to differ from `code`. */
+const wrong = (code: string) => (code === '000000' ? '111111' : '000000');
+const INVALID_CODE = 'This code is invalid or has expired. Request a new one.';
+const BREACHED_PASSWORD = 'Breached-pass1!';
+const BREACHED_MESSAGE = 'This password has appeared in a data breach. Choose a different one.';
 
 /** Lets fire-and-forget work finish, for asserting that nothing was sent. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
@@ -59,17 +65,20 @@ beforeAll(async () => {
   replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
   process.env.MONGO_URI = replSet.getUri('auth-e2e');
   process.env.JWT_ACCESS_SECRET = 'e2e-secret-that-is-at-least-32-characters';
-  process.env.APP_URL = 'http://localhost:5173';
   process.env.NODE_ENV = 'test';
 
   // Imported after the env is set: config.ts parses it on first import.
   const { AppModule } = await import('../src/app.module.js');
   const { configureApp } = await import('../src/setup.js');
   const { MailService } = await import('../src/mail/mail.service.js');
+  const { BreachedPasswordsService } = await import('../src/auth/breached-passwords.service.js');
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(MailService)
     .useValue(recordingMail)
+    // No network in tests: one known "breached" password instead of the HIBP API.
+    .overrideProvider(BreachedPasswordsService)
+    .useValue({ isBreached: async (password: string) => password === BREACHED_PASSWORD })
     .compile();
   app = configureApp(moduleRef.createNestApplication());
   await app.init();
@@ -215,56 +224,90 @@ async function signUpAs(email: string, password = 'Passw0rd!') {
   return { access: cookie(res, ACCESS_COOKIE), refresh: cookie(res, REFRESH_COOKIE) };
 }
 
-describe('email verification', () => {
-  it('sign-up emails a link built from APP_URL, with the token in the #fragment', async () => {
+describe('email verification (6-digit code)', () => {
+  it('sign-up emails a 6-digit code', async () => {
     await signUpAs('grace@example.com');
-    await tokenFromMail('grace@example.com', 'verify');
-    expect(mailsTo('grace@example.com', 'verify')[0]!.link).toMatch(/^http:\/\/localhost:5173\/verify-email#token=[\w-]{43}$/);
+    expect(await codeFromMail('grace@example.com', 'verify')).toMatch(/^\d{6}$/);
   });
 
-  it('verifies exactly once', async () => {
+  it('verifies the signed-in user with the code, exactly once', async () => {
     const { access } = await signUpAs('hopper@example.com');
-    const token = await tokenFromMail('hopper@example.com', 'verify');
+    const code = await codeFromMail('hopper@example.com', 'verify');
 
-    await http.post('/api/auth/verify-email').send({ token }).expect(204);
+    await http.post('/api/auth/verify-email').set('Cookie', access).send({ code }).expect(204);
     expect((await http.get('/api/users/me').set('Cookie', access)).body.emailVerified).toBe(true);
-
-    const reuse = await http.post('/api/auth/verify-email').send({ token }).expect(400);
-    expect(reuse.body.detail).toBe('This link is invalid or has expired. Request a new one.');
   });
 
-  it('rejects an unknown token with the same message', async () => {
-    const res = await http.post('/api/auth/verify-email').send({ token: 'made-up' }).expect(400);
-    expect(res.body.detail).toBe('This link is invalid or has expired. Request a new one.');
+  it('needs a session: a code alone verifies nobody', async () => {
+    await http.post('/api/auth/verify-email').send({ code: '123456' }).expect(401);
+  });
+
+  it('rejects a wrong code with the generic message', async () => {
+    const { access } = await signUpAs('lovelace@example.com');
+    const code = await codeFromMail('lovelace@example.com', 'verify');
+    const res = await http.post('/api/auth/verify-email').set('Cookie', access).send({ code: wrong(code) }).expect(400);
+    expect(res.body.detail).toBe(INVALID_CODE);
+  });
+
+  // Pinned: a code is dead after 5 wrong attempts.
+  it('kills the code after 5 wrong attempts, even if the 6th is right', async () => {
+    const { access } = await signUpAs('dijkstra@example.com');
+    const code = await codeFromMail('dijkstra@example.com', 'verify');
+
+    for (let i = 0; i < 5; i++) {
+      await http.post('/api/auth/verify-email').set('Cookie', access).send({ code: wrong(code) }).expect(400);
+    }
+    await http.post('/api/auth/verify-email').set('Cookie', access).send({ code }).expect(400);
   });
 
   it('resend needs a session, and sends nothing once verified', async () => {
     await http.post('/api/auth/verify-email/resend').expect(401);
 
     const { access } = await signUpAs('lamarr@example.com');
-    await http.post('/api/auth/verify-email').send({ token: await tokenFromMail('lamarr@example.com', 'verify') });
+    const code = await codeFromMail('lamarr@example.com', 'verify');
+    await http.post('/api/auth/verify-email').set('Cookie', access).send({ code }).expect(204);
     await http.post('/api/auth/verify-email/resend').set('Cookie', access).expect(202);
     await settle();
     expect(mailsTo('lamarr@example.com', 'verify')).toHaveLength(1);
   });
 
-  it('resend (after the cooldown) issues a new link and kills the old one', async () => {
+  it('resend (after the cooldown) sends a new code and kills the old one', async () => {
     const { access } = await signUpAs('turing@example.com');
-    const first = await tokenFromMail('turing@example.com', 'verify');
-    // Age the first link past the 60 s per-account cooldown (native driver: createdAt is immutable in Mongoose).
-    const tokens = app.get<Model<unknown>>(getModelToken('OneTimeTokenRecord'));
-    await tokens.collection.updateMany({}, { $set: { createdAt: new Date(Date.now() - 120_000) } });
+    const first = await codeFromMail('turing@example.com', 'verify');
+    // Move the 60 s per-account mail cooldown into the past.
+    const users = app.get<Model<unknown>>(getModelToken('UserRecord'));
+    await users.updateOne({ email: 'turing@example.com' }, { 'mailSentAt.verify': new Date(Date.now() - 120_000) });
 
     await http.post('/api/auth/verify-email/resend').set('Cookie', access).expect(202);
     await vi.waitFor(() => expect(mailsTo('turing@example.com', 'verify')).toHaveLength(2));
-    const second = await tokenFromMail('turing@example.com', 'verify');
+    const second = await codeFromMail('turing@example.com', 'verify');
 
-    await http.post('/api/auth/verify-email').send({ token: first }).expect(400);
-    await http.post('/api/auth/verify-email').send({ token: second }).expect(204);
+    if (first !== second) await http.post('/api/auth/verify-email').set('Cookie', access).send({ code: first }).expect(400);
+    await http.post('/api/auth/verify-email').set('Cookie', access).send({ code: second }).expect(204);
+  });
+
+  it('a burst of resends sends at most one email (atomic cooldown)', async () => {
+    const { access } = await signUpAs('shannon@example.com');
+    await codeFromMail('shannon@example.com', 'verify'); // the sign-up mail claimed the slot
+    const users = app.get<Model<unknown>>(getModelToken('UserRecord'));
+    await users.updateOne({ email: 'shannon@example.com' }, { 'mailSentAt.verify': new Date(Date.now() - 120_000) });
+
+    await Promise.all([1, 2, 3].map(() => http.post('/api/auth/verify-email/resend').set('Cookie', access)));
+    await settle();
+    expect(mailsTo('shannon@example.com', 'verify')).toHaveLength(2); // sign-up + exactly one resend
+  });
+
+  it('the verification email contains no user-supplied text', async () => {
+    await http
+      .post('/api/auth/signup')
+      .send({ email: 'victim@example.com', name: 'Call +1 555 0100 to unlock', password: 'Passw0rd!' })
+      .expect(201);
+    await codeFromMail('victim@example.com', 'verify');
+    expect(Object.keys(mailsTo('victim@example.com', 'verify')[0]!)).toEqual(['kind', 'to', 'code']);
   });
 });
 
-describe('password reset', () => {
+describe('password reset (6-digit code)', () => {
   // Pinned: forgot-password returns 202 for unknown emails and when throttled.
   it('forgot-password answers 202 for an unknown email and sends nothing', async () => {
     await http.post('/api/auth/forgot-password').send({ email: 'nobody@example.com' }).expect(202);
@@ -275,7 +318,7 @@ describe('password reset', () => {
   it('a second request within the cooldown still answers 202 but sends nothing', async () => {
     await signUpAs('knuth@example.com');
     await http.post('/api/auth/forgot-password').send({ email: 'knuth@example.com' }).expect(202);
-    await tokenFromMail('knuth@example.com', 'reset');
+    await codeFromMail('knuth@example.com', 'reset');
 
     await http.post('/api/auth/forgot-password').send({ email: 'KNUTH@example.com' }).expect(202);
     await settle();
@@ -283,13 +326,14 @@ describe('password reset', () => {
   });
 
   // Pinned: after a reset, old sessions and the old password fail.
-  it('resets the password, signs out every device, and the link works once', async () => {
+  it('resets the password, signs out every device, and the code works once', async () => {
     const laptop = await signUpAs('liskov@example.com', 'Old-pass1!');
     const phone = await http.post('/api/auth/signin').send({ email: 'liskov@example.com', password: 'Old-pass1!' }).expect(200);
     await http.post('/api/auth/forgot-password').send({ email: 'liskov@example.com' }).expect(202);
-    const token = await tokenFromMail('liskov@example.com', 'reset');
+    const code = await codeFromMail('liskov@example.com', 'reset');
 
-    await http.post('/api/auth/reset-password').send({ token, password: 'New-pass1!', confirm: 'New-pass1!' }).expect(204);
+    const reset = { email: 'liskov@example.com', code, password: 'New-pass1!', confirm: 'New-pass1!' };
+    await http.post('/api/auth/reset-password').send(reset).expect(204);
 
     await http.get('/api/users/me').set('Cookie', laptop.access).expect(401); // old access token
     await http.post('/api/auth/refresh').set('Cookie', laptop.refresh).expect(401); // old refresh, device 1
@@ -298,23 +342,110 @@ describe('password reset', () => {
     const fresh = await http.post('/api/auth/signin').send({ email: 'liskov@example.com', password: 'New-pass1!' }).expect(200);
     expect(fresh.body.emailVerified).toBe(true); // owning the inbox proves the address
 
-    await http.post('/api/auth/reset-password').send({ token, password: 'Other-pass1!', confirm: 'Other-pass1!' }).expect(400);
+    await http.post('/api/auth/reset-password').send({ ...reset, password: 'Other-pass1!', confirm: 'Other-pass1!' }).expect(400);
     await vi.waitFor(() => expect(mailsTo('liskov@example.com', 'changed')).toHaveLength(1));
   });
 
-  it('a mismatched confirmation fails on the confirm field and leaves the link usable', async () => {
+  // Pinned: unknown email and wrong code look identical.
+  it('gives the same answer for an unknown email and a wrong code', async () => {
+    await signUpAs('hoare@example.com');
+    await http.post('/api/auth/forgot-password').send({ email: 'hoare@example.com' }).expect(202);
+    const code = await codeFromMail('hoare@example.com', 'reset');
+
+    const body = { password: 'New-pass1!', confirm: 'New-pass1!' };
+    const unknown = await http.post('/api/auth/reset-password').send({ ...body, email: 'ghost@example.com', code }).expect(400);
+    const wrongCode = await http.post('/api/auth/reset-password').send({ ...body, email: 'hoare@example.com', code: wrong(code) }).expect(400);
+    expect(unknown.body).toEqual(wrongCode.body);
+    expect(unknown.body.detail).toBe(INVALID_CODE);
+  });
+
+  it('kills the reset code after 5 wrong attempts', async () => {
+    await signUpAs('codd@example.com');
+    await http.post('/api/auth/forgot-password').send({ email: 'codd@example.com' }).expect(202);
+    const code = await codeFromMail('codd@example.com', 'reset');
+    const body = { email: 'codd@example.com', password: 'New-pass1!', confirm: 'New-pass1!' };
+
+    for (let i = 0; i < 5; i++) {
+      await http.post('/api/auth/reset-password').send({ ...body, code: wrong(code) }).expect(400);
+    }
+    await http.post('/api/auth/reset-password').send({ ...body, code }).expect(400);
+    await http.post('/api/auth/signin').send({ email: 'codd@example.com', password: 'Passw0rd!' }).expect(200); // unchanged
+  });
+
+  it('a mismatched confirmation fails on the confirm field and leaves the code usable', async () => {
     await signUpAs('hamilton@example.com');
     await http.post('/api/auth/forgot-password').send({ email: 'hamilton@example.com' }).expect(202);
-    const token = await tokenFromMail('hamilton@example.com', 'reset');
+    const code = await codeFromMail('hamilton@example.com', 'reset');
+    const body = { email: 'hamilton@example.com', code, password: 'New-pass1!' };
 
-    const res = await http.post('/api/auth/reset-password').send({ token, password: 'New-pass1!', confirm: 'New-pass2!' }).expect(400);
+    const res = await http.post('/api/auth/reset-password').send({ ...body, confirm: 'New-pass2!' }).expect(400);
     expect(res.body.errors).toEqual([{ path: 'confirm', message: 'Passwords don’t match' }]);
-    await http.post('/api/auth/reset-password').send({ token, password: 'New-pass1!', confirm: 'New-pass1!' }).expect(204);
+    await http.post('/api/auth/reset-password').send({ ...body, confirm: 'New-pass1!' }).expect(204);
   });
 
   it('rejects a weak new password with field errors', async () => {
-    const res = await http.post('/api/auth/reset-password').send({ token: 'x', password: 'weak', confirm: 'weak' }).expect(400);
+    const res = await http
+      .post('/api/auth/reset-password')
+      .send({ email: 'a@b.co', code: '123456', password: 'weak', confirm: 'weak' })
+      .expect(400);
     expect(res.body.errors.map((e: { path: string }) => e.path)).toContain('password');
+  });
+});
+
+describe('breached passwords', () => {
+  it('sign-up rejects a breached password on the password field', async () => {
+    const res = await http
+      .post('/api/auth/signup')
+      .send({ email: 'breach@example.com', name: 'Breach Test', password: BREACHED_PASSWORD })
+      .expect(400);
+    expect(res.body.errors).toEqual([{ path: 'password', message: BREACHED_MESSAGE }]);
+  });
+
+  it('reset rejects a breached password without burning the code', async () => {
+    await signUpAs('ritchie@example.com');
+    await http.post('/api/auth/forgot-password').send({ email: 'ritchie@example.com' }).expect(202);
+    const code = await codeFromMail('ritchie@example.com', 'reset');
+
+    const breached = { email: 'ritchie@example.com', code, password: BREACHED_PASSWORD, confirm: BREACHED_PASSWORD };
+    const res = await http.post('/api/auth/reset-password').send(breached).expect(400);
+    expect(res.body.errors).toEqual([{ path: 'password', message: BREACHED_MESSAGE }]);
+    await http
+      .post('/api/auth/reset-password')
+      .send({ ...breached, password: 'Fresh-pass1!', confirm: 'Fresh-pass1!' })
+      .expect(204);
+  });
+});
+
+describe('account lockout', () => {
+  const signInAs = (email: string, password: string) => http.post('/api/auth/signin').send({ email, password });
+
+  it('locks after 5 wrong passwords: the right one is refused too, with the same message', async () => {
+    await signUpAs('mallory@example.com', 'Right-pass1!');
+    for (let i = 0; i < 5; i++) await signInAs('mallory@example.com', 'Wrong-pass1!').expect(401);
+
+    const locked = await signInAs('mallory@example.com', 'Right-pass1!').expect(401);
+    expect(locked.body.detail).toBe('Invalid email or password'); // no "account locked" hint
+  });
+
+  it('a successful sign-in resets the count', async () => {
+    await signUpAs('trent@example.com', 'Right-pass1!');
+    for (let i = 0; i < 4; i++) await signInAs('trent@example.com', 'Wrong-pass1!').expect(401);
+    await signInAs('trent@example.com', 'Right-pass1!').expect(200);
+    for (let i = 0; i < 4; i++) await signInAs('trent@example.com', 'Wrong-pass1!').expect(401);
+    await signInAs('trent@example.com', 'Right-pass1!').expect(200);
+  });
+
+  it('a password reset lifts the lock', async () => {
+    await signUpAs('peggy@example.com', 'Right-pass1!');
+    for (let i = 0; i < 5; i++) await signInAs('peggy@example.com', 'Wrong-pass1!').expect(401);
+
+    await http.post('/api/auth/forgot-password').send({ email: 'peggy@example.com' }).expect(202);
+    const code = await codeFromMail('peggy@example.com', 'reset');
+    await http
+      .post('/api/auth/reset-password')
+      .send({ email: 'peggy@example.com', code, password: 'Fresh-pass1!', confirm: 'Fresh-pass1!' })
+      .expect(204);
+    await signInAs('peggy@example.com', 'Fresh-pass1!').expect(200);
   });
 });
 

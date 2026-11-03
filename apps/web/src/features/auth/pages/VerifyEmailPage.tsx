@@ -1,66 +1,75 @@
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useState } from 'react';
-import { Link } from 'react-router';
-import { Button, buttonVariants } from '@/components/ui/button';
-import { Spinner } from '@/components/ui/spinner';
+import { useForm } from 'react-hook-form';
+import { Link, Navigate, useNavigate } from 'react-router';
+import { toast } from 'sonner';
+import { verifyEmailSchema } from '@auth-module/shared/auth-schemas';
+import { Button } from '@/components/ui/button';
+import { FieldGroup } from '@/components/ui/field';
 import { ApiError, api } from '@/lib/api';
+import { applyServerErrors } from '@/lib/form-errors';
 import { useAuth } from '../AuthProvider';
 import { AuthLayout } from '../components/AuthLayout';
-import { FormError } from '../components/FormStatus';
-import { useLinkToken } from '../hooks/useLinkToken';
+import { CodeField } from '../components/CodeField';
+import { FormError, SubmitButton } from '../components/FormStatus';
 
-type Status = { kind: 'idle' } | { kind: 'submitting' } | { kind: 'done' } | { kind: 'error'; message: string };
-
+// Behind <RequireAuth>: the code verifies the signed-in user's own address.
 export default function VerifyEmailPage() {
-  const token = useLinkToken();
   const auth = useAuth();
-  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const navigate = useNavigate();
+  const [resending, setResending] = useState(false);
+  const form = useForm({ resolver: zodResolver(verifyEmailSchema), mode: 'onTouched', defaultValues: { code: '' } });
+  const {
+    register,
+    formState: { errors, isSubmitting },
+  } = form;
 
-  // Only a click sends the token: link scanners (e.g. Safe Links) open URLs and
-  // run their JavaScript, and would otherwise use the link up before the user does.
-  async function confirm() {
-    setStatus({ kind: 'submitting' });
+  const onSubmit = form.handleSubmit(async (data) => {
     try {
-      await api.post('/auth/verify-email', { token });
-      setStatus({ kind: 'done' });
-      if (auth.status === 'authenticated') await auth.reloadUser();
+      await api.post('/auth/verify-email', data);
+      await auth.reloadUser();
+      toast.success('Email confirmed');
+      navigate('/', { replace: true });
     } catch (error) {
-      setStatus({ kind: 'error', message: error instanceof ApiError ? error.message : 'Something went wrong.' });
+      applyServerErrors(error, form.setError);
+    }
+  });
+
+  async function resend() {
+    setResending(true);
+    try {
+      await api.post('/auth/verify-email/resend');
+      toast.success('We sent you a new code');
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : 'Couldn’t send the code. Try again.');
+    } finally {
+      setResending(false);
     }
   }
 
-  const home = (
-    <Link to="/" className="text-foreground underline underline-offset-4">
-      Go to the app
-    </Link>
-  );
-
-  if (!token) {
-    return (
-      <AuthLayout title="Confirm your email" description="This link is incomplete. Open the link from the email again." footer={home}>
-        {null}
-      </AuthLayout>
-    );
-  }
-
-  if (status.kind === 'done') {
-    return (
-      <AuthLayout title="Email confirmed" description="Thanks, your email address is verified." footer={null}>
-        <Link to="/" className={buttonVariants({ size: 'lg', className: 'w-full' })}>
-          Continue
-        </Link>
-      </AuthLayout>
-    );
-  }
+  if (auth.status !== 'authenticated') return null; // RequireAuth renders us only when signed in
+  if (auth.user.emailVerified) return <Navigate to="/" replace />;
 
   return (
-    <AuthLayout title="Confirm your email" description="One click to confirm this is your email address." footer={home}>
-      <div className="grid gap-5">
-        <FormError message={status.kind === 'error' ? status.message : undefined} />
-        <Button size="lg" className="w-full" onClick={confirm} disabled={status.kind === 'submitting'}>
-          {status.kind === 'submitting' && <Spinner aria-hidden />}
-          Confirm my email
+    <AuthLayout
+      title="Confirm your email"
+      description={`Enter the code we sent to ${auth.user.email}. It expires in 10 minutes.`}
+      footer={
+        <Link to="/" className="text-foreground underline underline-offset-4">
+          Do it later
+        </Link>
+      }
+    >
+      <form onSubmit={onSubmit} noValidate className="grid gap-5">
+        <FieldGroup>
+          <CodeField error={errors.code} {...register('code')} />
+        </FieldGroup>
+        <FormError message={errors.root?.server?.message} />
+        <SubmitButton pending={isSubmitting}>Confirm email</SubmitButton>
+        <Button type="button" variant="link" onClick={resend} disabled={resending}>
+          Didn’t get it? Send a new code
         </Button>
-      </div>
+      </form>
     </AuthLayout>
   );
 }

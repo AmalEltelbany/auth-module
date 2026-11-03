@@ -1,4 +1,4 @@
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { Prop, raw, Schema, SchemaFactory } from '@nestjs/mongoose';
 import type { HydratedDocument } from 'mongoose';
 import type { User } from '@auth-module/shared/types';
 
@@ -20,6 +20,19 @@ export class UserRecord {
   // Carried in access tokens; bumping it invalidates every live token at once.
   @Prop({ default: 0 })
   sessionVersion!: number;
+
+  // Consecutive wrong passwords. Stored on the user, not in memory, so the
+  // lockout holds across API instances and against attackers rotating IPs.
+  @Prop({ default: 0 })
+  failedLogins!: number;
+
+  @Prop({ type: Date, default: null })
+  lockedUntil!: Date | null;
+
+  // Last verification / reset email, for the per-account mail cooldown.
+  // raw(): a plain nested object, not a subdocument (which would get its own _id).
+  @Prop(raw({ verify: { type: Date }, reset: { type: Date } }))
+  mailSentAt?: { verify?: Date; reset?: Date };
 }
 
 export type UserDocument = HydratedDocument<UserRecord>;

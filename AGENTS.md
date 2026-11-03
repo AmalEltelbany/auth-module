@@ -35,7 +35,6 @@ API (`apps/api/.env`, documented in `.env.example`):
 
 - `MONGO_URI`: must point at a replica set (transactions)
 - `JWT_ACCESS_SECRET`: signs access tokens
-- `APP_URL`: public web origin; every email link is built from it
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`: if `SMTP_HOST` is empty, mail is logged instead of sent. That's development only; config refuses to boot in production without `SMTP_HOST`.
 
 Web: none. It calls the relative path `/api`, proxied by Vite in dev and nginx in prod.
@@ -147,30 +146,37 @@ localStorage.setItem('token', res.accessToken);
 await api.post('/auth/signin', body); // credentials: 'include' in lib/api.ts
 ```
 
-## One-time tokens (verify email, reset password)
+## One-time codes (verify email, reset password)
 
-- 32 random bytes (`base64url`) go in the link; only `sha256(raw)` is stored.
-- Consume with **one** atomic `findOneAndUpdate({ tokenHash, type, usedAt: null, expiresAt: { $gt: now } }, { usedAt: now })`. Never find → check → update.
+Emails carry a **6-digit code** the user types into the app. There are no links.
+
+- `crypto.randomInt`, zero-padded. Stored as an **HMAC** (server key from config), never a plain hash: a 6-digit code has only 10⁶ values, so a leaked plain sha256 would be reversed instantly.
+- **One live code per user and type.** Look codes up by `userId` + `type`, never by the code itself (codes repeat across users). Issuing a new code deletes the old one.
+- **Expiry 10 min** (ASVS 6.5.5). **5 wrong attempts and the code is dead.**
+- **Every check spends an attempt first**, in one atomic `findOneAndUpdate` (`attempts < 5` → `$inc`), then compares with `timingSafeEqual`, then claims `usedAt` atomically.
+- **Never check a code inside a transaction.** An abort would roll the attempt counter back and allow unlimited guesses. Check it first, then run the transaction.
 - Keep the `expiresAt` check in the query. Mongo's TTL cleanup only runs about once a minute.
-- Expiry: verify 24 h, reset 30 min. Issuing a new token deletes older unused ones; a password change deletes all reset tokens.
-- Links put the token in a `#fragment`, never in `?query`. The page strips it with `history.replaceState` and POSTs it **only after a user click**. Email scanners open links and run JavaScript.
-- Links are built from `APP_URL`, never from the request's `Host` header.
+- **Emails to unverified addresses contain only the code.** No name or other user-supplied text: whoever signed up with the address controls those fields.
+- **Per-account mail cooldown (60 s)** via `UsersService.claimMailSlot()`, one atomic update. Never "check, then send" (two requests can both pass the check).
 
 ## Enumeration
 
 - `POST /auth/forgot-password` **always** returns 202, even for an unknown email or a tripped rate limit. Do the lookup and send the mail **after** responding.
-- Sign-in failures return one generic "Invalid email or password".
+- `POST /auth/reset-password` gives the **same 400** for an unknown email as for a wrong code.
+- Sign-in failures, including a locked account, return one generic "Invalid email or password".
 - Known, documented trade-off: signup returns 409 for a taken email.
 
-## Passwords
+## Passwords and lockout
 
-- argon2id. Minimum 8 (task spec; NIST's 15 noted as a deviation), maximum 128, letter + number + special character, plus a breached-password check (HIBP range API, fail open).
-- Sign-in only checks that a password was entered. **Never** apply strength rules at sign-in; that locks out existing accounts.
-- Password rules are defined once, in `packages/shared/src/password-rules.ts`.
+- **Hashing and rules:** argon2id. Minimum 8 (task spec; NIST's 15 noted as a deviation), maximum 128, letter + number + special character.
+- **Breached passwords** are checked at sign-up and reset with `BreachedPasswordsService`, which uses the HIBP range API and fails open. At reset, the check runs **before** the code, so a rejected password doesn't use the code up.
+- **Lockout:** 5 consecutive wrong passwords lock the account for 15 min. The counter lives on the user document, so it works across instances. Success resets it, and a password reset lifts the lock.
+- **Sign-in only checks that a password was entered.** **Never** apply strength rules at sign-in; that locks out existing accounts.
+- **One place for the rules:** `packages/shared/src/password-rules.ts`.
 
 ## Never log
 
-Passwords, password hashes, raw tokens, full email links, cookies, or `Authorization` headers. Log `userId`, the event and the IP. The one exception is the dev-only mail log when `SMTP_HOST` is empty, which production config makes impossible.
+Passwords, password hashes, raw tokens, one-time codes, cookies, or `Authorization` headers. Log `userId`, the event and the IP. The one exception is the dev-only mail log when `SMTP_HOST` is empty, which production config makes impossible.
 
 ## Never
 
@@ -238,8 +244,9 @@ await this.users.create({ email, ... });
 ```
 
 - `passwordHash`: `select: false`. It's never loaded unless explicitly selected.
-- Expiry: TTL index on `expiresAt` (sessions, one-time tokens).
-- Password reset runs in **one transaction**: consume token → save hash → `sessionVersion++` → revoke families → delete reset tokens. Transactions need a replica set.
+- Expiry: TTL index on `expiresAt` (sessions, one-time codes).
+- Nested plain objects use `@Prop(raw({...}))`. A bare `{ type: {...} }` becomes a subdocument with its own `_id`.
+- Password reset: check the code **first, outside** any transaction (see [One-time codes](#one-time-codes-verify-email-reset-password)), then **one transaction**: save hash + `sessionVersion++` → mark email verified → delete reset codes → revoke every session family. Transactions need a replica set.
 
 ## Config
 
@@ -258,12 +265,14 @@ await this.users.create({ email, ... });
 |---|---|---|
 | POST | `/auth/signup`, `/auth/signin`, `/auth/refresh` | public, throttled |
 | POST | `/auth/logout` | public, uses the refresh cookie (works with an expired access token) |
-| POST | `/auth/verify-email` | public, throttled |
+| POST | `/auth/verify-email` `{ code }` | protected (verifies the signed-in user), 10 / 15 min |
 | POST | `/auth/verify-email/resend` | protected, 3 / 15 min |
-| POST | `/auth/forgot-password` | public, always 202 |
-| POST | `/auth/reset-password` | public, throttled |
+| POST | `/auth/forgot-password` `{ email }` | public, always 202, 10 / 15 min |
+| POST | `/auth/reset-password` `{ email, code, password, confirm }` | public, 10 / 15 min |
 | GET | `/users/me` | protected |
 | GET | `/health` | public |
+
+Per-IP throttling is skipped when `NODE_ENV=test` (all e2e traffic shares one IP). Per-account limits (lockout, code attempts, mail cooldown) are always on and tested.
 
 Every endpoint has Swagger decorators and at least one error-case e2e test.
 
@@ -295,7 +304,7 @@ Every endpoint has Swagger decorators and at least one error-case e2e test.
 |---|---|
 | Current user | `AuthProvider` → `useAuth()` |
 | Form values / errors | react-hook-form |
-| Redirect target, token | router `state` / `location.hash` |
+| Redirect target, email passed from forgot → reset | router `state` |
 | Anything else | local `useState` |
 
 No global store and no query cache library. Cross-tab logout uses `BroadcastChannel('auth')`. On `visibilitychange`, re-check `/users/me`.
@@ -330,7 +339,7 @@ const checks = passwordRules.map(r => ({ label: r.label, ok: r.test(pw) }));
 
 - Object routes (`createBrowserRouter`). Import `RouterProvider` from `react-router/dom` and everything else from `react-router`.
 - Guards are layout routes: `<RequireAuth>` / `<GuestOnly>` render `<Outlet />` or `<Navigate replace />`.
-- Every route has an `errorElement`. Token pages use `lazy`.
+- Every route has an `errorElement`. Rarely visited pages (verify, forgot, reset) use `lazy`.
 
 ## Forms
 
@@ -385,6 +394,7 @@ const checks = passwordRules.map(r => ({ label: r.label, ok: r.test(pw) }));
 
 - **Use `MongoMemoryReplSet`, not `MongoMemoryServer`.** Password reset runs in a transaction, which fails on a standalone `mongod`.
 - Nest under Vitest needs `unplugin-swc`, or decorator metadata is dropped and injected services are `undefined`.
+- API e2e tests override `MailService` with a **recording fake** and read codes from it (`codeFromMail()`), and override `BreachedPasswordsService` so tests never call HIBP. Never test against real mail or the network.
 - `MONGOMS_DOWNLOAD_DIR` is pinned in `apps/api/vitest.config.ts` to the root `node_modules/.cache`. Don't remove it: running from `apps/api` would fall back to `~/.cache` and download ~800 MB again.
 - A pinned test must fail when its protection is removed. When adding one, break the code it guards once and watch it fail.
 - Web tests render the real route table with `renderApp(path)` from `src/test/render-app.tsx` and mock only the network at `lib/api.ts` (`vi.mock('@/lib/api')`). The `api.ts` tests stub `fetch` (`vi.stubGlobal`).
@@ -419,7 +429,9 @@ These guard security decisions. Never delete or weaken them; if one fails, the c
 
 | Test | Guards |
 |---|---|
-| Verify page sends no request until the button is clicked | email scanners burning tokens |
+| A code is dead after 5 wrong attempts, even if the 6th is right | brute-forcing a 6-digit code |
+| Reset gives the same answer for an unknown email and a wrong code | account enumeration |
+| 5 wrong passwords lock the account; the right one is refused with the generic message | password guessing across IPs |
 | 3 simultaneous 401s → exactly 1 `/auth/refresh` | refresh reuse detection logging the user out |
 | Forgot-password returns 202 for unknown emails and when throttled | account enumeration |
 | Reusing a used refresh token revokes the family | stolen refresh tokens |

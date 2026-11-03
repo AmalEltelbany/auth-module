@@ -49,6 +49,12 @@
 | shadcn's `sonner.tsx` imports `next-themes` | A stale Next.js package we had rejected, added silently | Read the generated component | Removed; toasts follow the OS theme |
 | Web tests: all 10 failed | jsdom has no `window.matchMedia`, which sonner calls | Test run | Small stub in the test setup |
 | 429s showed "ThrottlerException: Too Many Requests" | The library's internal message would have reached users on the forgot-password form | Tripped the limit with curl while building the page | Problem filter gives 429s a human `detail` |
+| Verification email included the user's name | Anyone can sign up with a victim's address; a "name" like "Call +1 555… to unlock" reached the victim from our trusted sender | Automated security review of the step 5 commit | Emails to unverified addresses contain only the code; names reject control characters and newlines |
+| Mail cooldown was "check, then send" | Concurrent requests could both pass the check and send several emails | Same security review | One atomic `claimMailSlot()` update on the user; e2e sends 3 parallel resends and expects exactly 1 email |
+| Startup treated any error as "signed out" | A 502 while the API restarted showed a signed-in user the sign-in page | Manual browser run (the API was restarting under my own mutation tests) | Only 401 means signed out; 5xx and network errors retry with backoff |
+| `mailSentAt` stored with an `_id` | Mongoose made the nested `{ verify, reset }` a subdocument | Inspected the stored document while debugging an "invalid code" | `@Prop(raw({...}))` |
+| First code from the email returned 400 | Not a bug: 18 minutes had passed and the 10-minute code had expired (the TTL sweeper had deleted it) | Queried Mongo instead of assuming | None needed; a fresh code verified |
+| Step 2 smoke-test API still running 14 hours later | Git Bash `kill` stopped the shell wrapper, not `node`; it held argon2's native file and blocked `npm ci` | `npm ci` EPERM, then listed every Node process | Stopped that one process; the user's other tools were left alone |
 | Refresh cookie as `__Secure-` with `Path=/api/auth` (decision 24) | `__Secure-` allows a `Domain` attribute, so a sibling subdomain could plant its own refresh token ("cookie tossing") and sign a victim into the attacker's account | Automated security review of the step 4 commit | `__Host-refresh_token`, `Path=/`; e2e asserts no `Domain` |
 | `refresh()` ignored `sessionVersion` | A refresh token issued before a password reset could have minted fresh access tokens afterwards, bypassing "sign out everywhere" (latent: nothing bumped the version yet) | Automated security review of the uncommitted step 4 | Each session row stores the version it was issued under; refresh rejects a mismatch and revokes the family. New pinned test, mutation-checked |
 | First mutation run "skipped" all 17 tests | Running vitest from `apps/api` made mongodb-memory-server download mongod into `~/.cache`; the timeout killed it, leaving a broken 950 KB binary (`spawn EFTYPE`) | Read the actual error instead of trusting "skipped" | Deleted the broken files; pinned `MONGOMS_DOWNLOAD_DIR` in the vitest config |
@@ -90,6 +96,13 @@ Who decided: **Me** (my call), **Me ← AI** (I accepted the AI's recommendation
 | 29 | SMTP missing | log mail everywhere / log in dev, refuse to boot in production | Dev-only logging | Me ← AI | Losing reset emails silently in production is worse than a failed deploy |
 | 30 | Per-account mail limit | in-memory counter / "token issued in the last 60 s?" from Mongo | Mongo query | Me ← AI | Works across instances, zero new code paths; the IP throttle covers bursts |
 | 31 | Where verify/reset logic lives | new `RecoveryService` / `AuthService` | `AuthService` | Me ← AI | One cohesive auth service; split it if it grows further |
+| 32 | **Email links vs one-time codes** | links (built in step 5) / 6-digit OTP | **OTP for both flows** | **Me ≠ AI** | My call mid-build, after the link flow was built and verified. No link scanners burning tokens, no `APP_URL`, and the user stays in the app |
+| 33 | OTP design | 6 digits, 10 min, 5 tries / 8 digits, 15 min | 6 digits, 10 min, 5 tries | Me ← AI | ASVS 6.5.5 caps out-of-band codes at 10 min; 5 tries in 10⁶ is a 0.0005% guess chance |
+| 34 | Storing codes | sha256 / HMAC with a server key / argon2 | HMAC (key: the JWT secret) | Me ← AI | sha256 of 10⁶ values reverses instantly from a leaked DB; argon2 is unneeded with 5 attempts. Rotating the secret only voids codes ≤ 10 min old |
+| 35 | Where attempts are counted | inside the reset transaction / before it | Before, atomically | Me ← AI | Inside, a wrong guess's attempt would roll back with the aborted transaction: unlimited guesses |
+| 36 | Locked account response | "account locked" / generic 401 | Generic 401 | Me ← AI | A distinct message confirms the account exists; reset is the way out |
+| 37 | Per-IP throttling in e2e | keep (tests hit limits) / skip when `NODE_ENV=test` | Skip in tests | Me ← AI | All test traffic shares one IP. 429 verified manually; per-account limits stay tested |
+| 38 | Breach check on HIBP outage | fail closed / fail open | Fail open | Me ← AI | An outage of a third-party API must not block sign-up or reset |
 
 ## Build log
 
@@ -230,3 +243,31 @@ Each step records: **prompt → what AI generated → what I changed → how it 
     - a second device (curl) gets 401 on both access and refresh
     - old password 401, new password 200, reusing the link 400
     - the "Your password was changed" email arrives
+
+### Step 6: hardening, OTP instead of links, README, CI
+- **Prompts:**
+  - "Start step 6"
+  - then, mid-step: "i want otp not email link" (both flows; 6 digits, 10 min, 5 tries)
+- **Generated:**
+  - **Lockout:** 5 wrong passwords lock the account for 15 min. The counter lives on the user document; a reset lifts the lock; the response stays generic.
+  - **Breached-password check:** HIBP k-anonymity range API, fails open. Runs at sign-up and reset, before the code is checked.
+  - **OTP rework, replacing step 5's links:**
+    - API: an HMAC'd code store with atomic attempt counting; `verify-email` now requires a session; reset takes `{ email, code, password, confirm }`; `APP_URL` removed
+    - Web: a code-entry verify page (protected), forgot leads to a reset page with the email filled in, a `CodeField` input (`one-time-code` autocomplete), and the banner now says "Enter code"
+  - **Security-review fixes for the step 5 commit:** no user text in emails to unverified addresses; an atomic per-account mail cooldown.
+  - **Resilience:** startup retries 5xx and network errors instead of signing the user out.
+  - **Also:** a README for graders, and a GitHub Actions CI workflow (lint, typecheck, test, build on Node 24).
+- **Changed:**
+  - **Mutation-checked the new protections:**
+    - no attempt limit fails both "5 wrong attempts" tests
+    - a distinct "no such account" message fails the enumeration test
+    - no lockout counting fails the lockout test
+  - **Kept code checks outside the reset transaction on purpose.** An abort would roll back the attempt counter (decision 35).
+  - **CI:** moved the mongod cache step *after* `npm ci`, which deletes `node_modules`.
+  - Several of the corrections above were found only by running the real stack, not by the tests: the 502 sign-out, the `_id` on `mailSentAt`, and the leftover process.
+- **Verified:**
+  - From a clean `npm ci`, the same sequence as CI: `lint` (exit 0; 2 known warnings), `typecheck` (0 errors), `test` (**104/104**: shared 35, API 43, web 26), `build`
+  - **End to end in a real browser with real SMTP into Mailpit:**
+    - **Verification:** sign-up, then the email contains only the code (no link, no name), entered with a pasted space, then 204, home, banner gone. An 18-minute-old code was correctly refused as expired.
+    - **Reset:** forgot, then the reset page with the email filled in, then the code from Mailpit and a new password, then `/signin`
+    - **After the reset:** a second device's access and refresh tokens give 401, the old password 401, the new one 200, reusing the code 400, and the "password changed" email arrived

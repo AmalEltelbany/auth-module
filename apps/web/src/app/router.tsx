@@ -5,7 +5,7 @@ import { GuestOnly, RequireAuth } from '@/features/auth/guards';
 import HomePage from '@/features/home/pages/HomePage';
 import { NotFoundPage, RouteError } from './errors';
 
-// Pages only reached from an email link: loaded on demand, out of the main bundle.
+// Rarely visited pages: loaded on demand, out of the main bundle.
 const lazyPage = (load: () => Promise<{ default: React.ComponentType }>) => async () => ({
   Component: (await load()).default,
 });
@@ -15,7 +15,14 @@ export const routes: RouteObject[] = [
   {
     errorElement: <RouteError />,
     children: [
-      { element: <RequireAuth />, children: [{ index: true, element: <HomePage /> }] },
+      {
+        element: <RequireAuth />,
+        children: [
+          { index: true, element: <HomePage /> },
+          // The code verifies the signed-in user's own address.
+          { path: 'verify-email', lazy: lazyPage(() => import('@/features/auth/pages/VerifyEmailPage')) },
+        ],
+      },
       {
         element: <GuestOnly />,
         children: [
@@ -24,8 +31,7 @@ export const routes: RouteObject[] = [
           { path: 'forgot-password', lazy: lazyPage(() => import('@/features/auth/pages/ForgotPasswordPage')) },
         ],
       },
-      // Open to everyone: the link may be opened signed in or signed out.
-      { path: 'verify-email', lazy: lazyPage(() => import('@/features/auth/pages/VerifyEmailPage')) },
+      // Open to everyone: a signed-in user who forgot their password can reset it too.
       { path: 'reset-password', lazy: lazyPage(() => import('@/features/auth/pages/ResetPasswordPage')) },
       { path: '*', element: <NotFoundPage /> },
     ],

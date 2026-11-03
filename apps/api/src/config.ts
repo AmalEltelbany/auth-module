@@ -13,7 +13,6 @@ const envSchema = z
     PORT: z.coerce.number().int().positive().default(3001),
     MONGO_URI: z.string().startsWith('mongodb'),
     JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
-    APP_URL: z.url(),
     // Empty SMTP_HOST outside production: mail is logged instead of sent.
     SMTP_HOST: z.string().optional(),
     SMTP_PORT: z.coerce.number().int().positive().default(1025),

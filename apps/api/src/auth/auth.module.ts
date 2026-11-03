@@ -10,21 +10,22 @@ import { ACCESS_TOKEN_TTL_SECONDS } from './auth.cookies.js';
 import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
 import { AuthService } from './auth.service.js';
-import { OneTimeTokenRecord, OneTimeTokenSchema } from './one-time-token.schema.js';
-import { OneTimeTokensService } from './one-time-tokens.service.js';
+import { BreachedPasswordsService } from './breached-passwords.service.js';
+import { OneTimeCodeRecord, OneTimeCodeSchema } from './one-time-code.schema.js';
+import { OneTimeCodesService } from './one-time-codes.service.js';
 
 @Module({
   imports: [
     UsersModule,
     SessionsModule,
     MailModule,
-    MongooseModule.forFeature([{ name: OneTimeTokenRecord.name, schema: OneTimeTokenSchema }]),
+    MongooseModule.forFeature([{ name: OneTimeCodeRecord.name, schema: OneTimeCodeSchema }]),
     JwtModule.register({
       secret: config.JWT_ACCESS_SECRET,
       signOptions: { expiresIn: ACCESS_TOKEN_TTL_SECONDS },
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, OneTimeTokensService, { provide: APP_GUARD, useClass: AuthGuard }],
+  providers: [AuthService, OneTimeCodesService, BreachedPasswordsService, { provide: APP_GUARD, useClass: AuthGuard }],
 })
 export class AuthModule {}

@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm, useWatch } from 'react-hook-form';
-import { Link, useNavigate } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { resetPasswordSchema } from '@auth-module/shared/auth-schemas';
 import { FieldGroup } from '@/components/ui/field';
@@ -8,20 +8,20 @@ import { api } from '@/lib/api';
 import { applyServerErrors } from '@/lib/form-errors';
 import { useAuth } from '../AuthProvider';
 import { AuthLayout } from '../components/AuthLayout';
+import { CodeField } from '../components/CodeField';
 import { FormError, SubmitButton } from '../components/FormStatus';
 import { PasswordChecklist } from '../components/PasswordChecklist';
 import { PasswordInput } from '../components/PasswordInput';
 import { TextField } from '../components/TextField';
-import { useLinkToken } from '../hooks/useLinkToken';
 
 export default function ResetPasswordPage() {
-  const token = useLinkToken();
   const auth = useAuth();
   const navigate = useNavigate();
+  const sentTo = (useLocation().state as { email?: string } | null)?.email ?? '';
   const form = useForm({
     resolver: zodResolver(resetPasswordSchema),
     mode: 'onTouched',
-    defaultValues: { token: token ?? '', password: '', confirm: '' },
+    defaultValues: { email: sentTo, code: '', password: '', confirm: '' },
   });
   const {
     register,
@@ -42,24 +42,24 @@ export default function ResetPasswordPage() {
     }
   });
 
-  const requestNewLink = (
-    <Link to="/forgot-password" className="text-foreground underline underline-offset-4">
-      Request a new link
-    </Link>
-  );
-
-  if (!token) {
-    return (
-      <AuthLayout title="Reset your password" description="This link is incomplete. Open the link from the email again." footer={requestNewLink}>
-        {null}
-      </AuthLayout>
-    );
-  }
-
   return (
-    <AuthLayout title="Choose a new password" description="This signs you out on every device." footer={requestNewLink}>
+    <AuthLayout
+      title="Choose a new password"
+      description={
+        sentTo
+          ? `If an account exists for ${sentTo}, we've sent it a 6-digit code. It expires in 10 minutes.`
+          : 'Enter your email, the 6-digit code we sent you, and a new password.'
+      }
+      footer={
+        <Link to="/forgot-password" className="text-foreground underline underline-offset-4">
+          Didn’t get a code? Send a new one
+        </Link>
+      }
+    >
       <form onSubmit={onSubmit} noValidate className="grid gap-5">
         <FieldGroup>
+          <TextField id="email" label="Email" type="email" autoComplete="email" error={errors.email} {...register('email')} />
+          <CodeField error={errors.code} {...register('code')} />
           <TextField
             id="password"
             label="New password"
@@ -78,8 +78,9 @@ export default function ResetPasswordPage() {
             {...register('confirm')}
           />
         </FieldGroup>
-        <FormError message={errors.root?.server?.message ?? errors.token?.message} />
+        <FormError message={errors.root?.server?.message} />
         <SubmitButton pending={isSubmitting}>Change password</SubmitButton>
+        <p className="text-center text-sm text-muted-foreground">This signs you out on every device.</p>
       </form>
     </AuthLayout>
   );

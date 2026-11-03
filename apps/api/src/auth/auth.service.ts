@@ -5,20 +5,24 @@ import * as argon2 from 'argon2';
 import type { Connection } from 'mongoose';
 import type { ResetPasswordInput, SignInInput, SignUpInput } from '@auth-module/shared/auth-schemas';
 import type { User } from '@auth-module/shared/types';
-import { config } from '../config.js';
 import { MailService } from '../mail/mail.service.js';
 import { SessionsService } from '../sessions/sessions.service.js';
 import { toUser, type UserDocument } from '../users/user.schema.js';
 import { UsersService } from '../users/users.service.js';
-import { OneTimeTokensService } from './one-time-tokens.service.js';
+import { BreachedPasswordsService } from './breached-passwords.service.js';
+import { OneTimeCodesService } from './one-time-codes.service.js';
 
 export type AccessTokenPayload = { sub: string; sv: number };
 export type AuthResult = { user: User; accessToken: string; refreshToken: string };
 
-// One message for unknown, used and expired links: no hint about which.
-const INVALID_LINK = 'This link is invalid or has expired. Request a new one.';
+// One message for wrong, used, expired and exhausted codes, and unknown emails:
+// no hint about which.
+const INVALID_CODE = 'This code is invalid or has expired. Request a new one.';
 // Per account, so a victim's inbox can't be flooded from many IPs.
 const MAIL_COOLDOWN_SECONDS = 60;
+// Per account, on top of the per-IP throttle: rotating IPs doesn't help guessing.
+const MAX_FAILED_LOGINS = 5;
+const LOCK_SECONDS = 15 * 60;
 
 @Injectable()
 export class AuthService implements OnModuleInit {
@@ -30,8 +34,9 @@ export class AuthService implements OnModuleInit {
   constructor(
     private readonly users: UsersService,
     private readonly sessions: SessionsService,
-    private readonly tokens: OneTimeTokensService,
+    private readonly codes: OneTimeCodesService,
     private readonly mail: MailService,
+    private readonly breached: BreachedPasswordsService,
     private readonly jwt: JwtService,
     @InjectConnection() private readonly connection: Connection,
   ) {}
@@ -41,24 +46,28 @@ export class AuthService implements OnModuleInit {
   }
 
   async signUp(input: SignUpInput, userAgent?: string): Promise<AuthResult> {
+    await this.rejectBreachedPassword(input.password);
     const passwordHash = await argon2.hash(input.password); // argon2id by default
     const user = await this.users.create({ email: input.email, name: input.name, passwordHash });
     // Not awaited: a mail outage must not block sign-up. The user can resend.
-    this.inBackground('verification email', () => this.sendVerificationLink(user));
+    this.inBackground('verification email', async () => {
+      if (await this.users.claimMailSlot(user.id, 'verify', MAIL_COOLDOWN_SECONDS)) await this.sendVerificationCode(user);
+    });
     return this.startSession(user, userAgent);
   }
 
-  async verifyEmail(token: string): Promise<void> {
-    const userId = await this.tokens.consume(token, 'verify');
-    if (!userId) throw new BadRequestException(INVALID_LINK);
-    await this.users.markEmailVerified(userId);
+  /** The signed-in user confirms their address with the emailed code. */
+  async verifyEmail(user: User, code: string): Promise<void> {
+    if (user.emailVerified) return;
+    if (!(await this.codes.consume(user.id, 'verify', code))) throw new BadRequestException(INVALID_CODE);
+    await this.users.markEmailVerified(user.id);
   }
 
   async resendVerification(user: User): Promise<void> {
     if (user.emailVerified) return;
-    if (await this.tokens.issuedWithin(user.id, 'verify', MAIL_COOLDOWN_SECONDS)) return;
+    if (!(await this.users.claimMailSlot(user.id, 'verify', MAIL_COOLDOWN_SECONDS))) return;
     const doc = await this.users.findById(user.id);
-    if (doc) await this.sendVerificationLink(doc);
+    if (doc) await this.sendVerificationCode(doc);
   }
 
   /**
@@ -69,34 +78,49 @@ export class AuthService implements OnModuleInit {
     setImmediate(() =>
       this.inBackground('password reset email', async () => {
         const user = await this.users.findByEmail(email);
-        if (!user || (await this.tokens.issuedWithin(user.id, 'reset', MAIL_COOLDOWN_SECONDS))) return;
-        const raw = await this.tokens.issue(user.id, 'reset');
-        await this.mail.sendPasswordReset(user.email, `${config.APP_URL}/reset-password#token=${raw}`);
+        if (!user || !(await this.users.claimMailSlot(user.id, 'reset', MAIL_COOLDOWN_SECONDS))) return;
+        await this.mail.sendPasswordResetCode(user.email, await this.codes.issue(user.id, 'reset'));
       }),
     );
   }
 
-  /** New password, every device signed out, every reset link dead: all or nothing. */
+  /** New password, every device signed out, every reset code dead: all or nothing. */
   async resetPassword(input: ResetPasswordInput): Promise<void> {
-    const passwordHash = await argon2.hash(input.password); // outside the transaction: retries reuse it
+    // Before the code is checked, so a rejected password doesn't burn the code.
+    await this.rejectBreachedPassword(input.password);
+    const user = await this.users.findByEmail(input.email);
+    // The code is checked OUTSIDE the transaction: a wrong guess must spend an
+    // attempt even though the request fails (an abort would roll it back).
+    // Unknown emails get the same error as wrong codes.
+    if (!user || !(await this.codes.consume(user.id, 'reset', input.code))) {
+      throw new BadRequestException(INVALID_CODE);
+    }
 
-    const userId = await this.connection.transaction(async (session) => {
-      const id = await this.tokens.consume(input.token, 'reset', session);
-      if (!id) throw new BadRequestException(INVALID_LINK);
-      await this.users.setPassword(id, passwordHash, session); // sessionVersion++ kills access tokens
-      await this.users.markEmailVerified(id, session); // they just proved they own the inbox
-      await this.tokens.deleteResetTokens(id, session);
-      await this.sessions.revokeAllForUser(id, session);
-      return id;
+    const passwordHash = await argon2.hash(input.password);
+    await this.connection.transaction(async (session) => {
+      await this.users.setPassword(user.id, passwordHash, session); // sessionVersion++ kills every token
+      await this.users.markEmailVerified(user.id, session); // they just proved they own the inbox
+      await this.codes.deleteAll(user.id, 'reset', session);
+      await this.sessions.revokeAllForUser(user.id, session);
     });
 
-    const user = await this.users.findById(userId);
-    if (user) this.inBackground('password changed email', () => this.mail.sendPasswordChanged(user.email));
+    this.inBackground('password changed email', () => this.mail.sendPasswordChanged(user.email));
   }
 
-  private async sendVerificationLink(user: UserDocument): Promise<void> {
-    const raw = await this.tokens.issue(user.id, 'verify');
-    await this.mail.sendVerification(user.email, user.name, `${config.APP_URL}/verify-email#token=${raw}`);
+  /** A field error on `password`, so the form shows it under the input. */
+  private async rejectBreachedPassword(password: string): Promise<void> {
+    if (await this.breached.isBreached(password)) {
+      throw new BadRequestException({
+        message: 'Validation failed',
+        errors: [{ path: 'password', message: 'This password has appeared in a data breach. Choose a different one.' }],
+      });
+    }
+  }
+
+  private async sendVerificationCode(user: UserDocument): Promise<void> {
+    // The code is the only variable content: the address isn't verified yet, so
+    // whoever signed up with it controls every other field (e.g. the name).
+    await this.mail.sendVerificationCode(user.email, await this.codes.issue(user.id, 'verify'));
   }
 
   private inBackground(what: string, task: () => Promise<void>): void {
@@ -105,8 +129,19 @@ export class AuthService implements OnModuleInit {
 
   async signIn(input: SignInInput, userAgent?: string): Promise<AuthResult> {
     const user = await this.users.findByEmailWithHash(input.email);
+    const locked = !!user?.lockedUntil && user.lockedUntil > new Date();
+    // Always verify (even when locked or unknown) so every failure takes the same time.
     const valid = await argon2.verify(user?.passwordHash ?? this.dummyHash, input.password);
-    if (!user || !valid) throw new UnauthorizedException('Invalid email or password');
+
+    if (!user || locked || !valid) {
+      if (user && !locked && (await this.users.recordFailedLogin(user.id, MAX_FAILED_LOGINS, LOCK_SECONDS))) {
+        this.logger.warn(`Account ${user.id} locked for ${LOCK_SECONDS / 60} min after ${MAX_FAILED_LOGINS} failed sign-ins`);
+      }
+      // Same answer when locked: a distinct message would confirm the account exists.
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    if (user.failedLogins > 0 || user.lockedUntil) await this.users.clearFailedLogins(user.id);
     return this.startSession(user, userAgent);
   }
 

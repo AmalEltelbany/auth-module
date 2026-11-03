@@ -17,19 +17,21 @@ export class MailService {
     : // ponytail: no SMTP outside production → the message is logged; config forbids this in production
       nodemailer.createTransport({ jsonTransport: true });
 
-  sendVerification(to: string, name: string, link: string) {
+  // No name or other user-supplied text: the address isn't verified yet, and
+  // whoever signed up with it controls that text.
+  sendVerificationCode(to: string, code: string) {
     return this.send(
       to,
-      'Confirm your email',
-      `Hi ${name},\n\nConfirm your email address by opening this link:\n\n${link}\n\nIt expires in 24 hours. If you didn't create an account, ignore this email.`,
+      `${code} is your verification code`,
+      `Your verification code is:\n\n    ${code}\n\nEnter it in the app to confirm your email. It expires in 10 minutes.\nIf you didn't create an account, ignore this email.`,
     );
   }
 
-  sendPasswordReset(to: string, link: string) {
+  sendPasswordResetCode(to: string, code: string) {
     return this.send(
       to,
-      'Reset your password',
-      `Someone asked to reset the password for this account.\n\nChoose a new password here:\n\n${link}\n\nIt expires in 30 minutes. If it wasn't you, ignore this email: your password hasn't changed.`,
+      `${code} is your password reset code`,
+      `Your password reset code is:\n\n    ${code}\n\nIt expires in 10 minutes. Never share it: we will never ask you for it.\nIf you didn't ask to reset your password, ignore this email; your password hasn't changed.`,
     );
   }
 

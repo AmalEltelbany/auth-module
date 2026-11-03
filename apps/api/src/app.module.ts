@@ -20,7 +20,11 @@ class HealthController {
 @Module({
   imports: [
     MongooseModule.forRoot(config.MONGO_URI),
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]), // per IP; auth routes are stricter
+    ThrottlerModule.forRoot({
+      throttlers: [{ ttl: 60_000, limit: 100 }], // per IP; auth routes are stricter
+      // ponytail: e2e tests send everything from one IP; per-account limits (lockout, code attempts) stay tested
+      skipIf: () => config.NODE_ENV === 'test',
+    }),
     UsersModule,
     AuthModule,
   ],
