@@ -38,6 +38,18 @@ describe('api: session refresh', () => {
     expect(calls('/api/users/me')).toBe(6); // 3 originals + 3 retries
   });
 
+  // Pinned: the in-tab single-flight can't see other tabs; the lock can.
+  it('refreshes inside the cross-tab "auth-refresh" Web Lock', async () => {
+    const { calls } = fakeApi({ refreshOk: true });
+    const request = vi.fn((_name: string, callback: () => Promise<boolean>) => callback());
+    vi.stubGlobal('navigator', { locks: { request } });
+
+    await api.get('/users/me');
+
+    expect(request).toHaveBeenCalledExactlyOnceWith('auth-refresh', expect.any(Function));
+    expect(calls('/api/auth/refresh')).toBe(1);
+  });
+
   it('signals session expiry and rejects with 401 when the refresh fails', async () => {
     fakeApi({ refreshOk: false });
     const expired = vi.fn();

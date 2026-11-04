@@ -39,13 +39,17 @@ export function onSessionExpired(listener: () => void): () => void {
 // token twice, which the API treats as theft and answers by revoking the session.
 let refreshing: Promise<boolean> | null = null;
 
-function refreshSession(): Promise<boolean> {
-  refreshing ??= fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
+const postRefresh = () =>
+  fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
     .then((res) => res.ok)
-    .catch(() => false)
-    .finally(() => {
-      refreshing = null;
-    });
+    .catch(() => false);
+
+function refreshSession(): Promise<boolean> {
+  // The Web Lock extends "one at a time" to every tab: a second tab waits, then
+  // sends the cookie the first one just rotated, not the used one.
+  refreshing ??= (navigator.locks ? navigator.locks.request('auth-refresh', postRefresh) : postRefresh()).finally(() => {
+    refreshing = null;
+  });
   return refreshing;
 }
 
