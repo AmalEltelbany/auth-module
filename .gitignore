@@ -11,8 +11,6 @@ docs/*
 !docs/UI.md
 !docs/flow.png
 !docs/flow.excalidraw
-!docs/system-design.png
-!docs/system-design.excalidraw
 
 # local agent/editor launch config
 .claude/

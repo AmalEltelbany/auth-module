@@ -82,9 +82,7 @@ Tokens stay in two httpOnly cookies. `apps/web` posts to `/api` with `credential
 
 ![How the auth module works: sign up or sign in leads to the protected welcome page; from there the user verifies the email with an OTP or signs out; forgot password leads to a reset with an OTP and back to sign in](docs/flow.png)
 
-The flow above is what a user does and which API call each page makes. The drawing below goes one level deeper, in three parts: how a request refreshes, what Mongo stores, and the order of a password reset.
-
-![Auth module system design: an expired access token triggers one shared refresh, Mongo stores hashes and counters rather than secrets, and password reset spends the code before the transaction](docs/system-design.png)
+The flow above is what a user does and which API call each page makes. One level deeper:
 
 **Request and refresh.** React calls the API, and the API writes the cookies; page scripts can't read them. When a protected call gets a 401, the web app refreshes once and retries. Every caller in that moment, in every tab, shares that one refresh (a Web Lock spans the tabs). A second presentation of the same refresh token revokes the whole family.
 
