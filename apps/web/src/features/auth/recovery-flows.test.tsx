@@ -118,7 +118,9 @@ describe('forgot → reset password (code)', () => {
     await user.type(await screen.findByLabelText('New password'), 'weak');
     await user.click(screen.getByRole('button', { name: 'Reset password' }));
 
-    expect(await screen.findByText('At least 8 characters', { selector: '[data-slot=field-error]' })).toBeTruthy();
+    expect(
+      await screen.findByText('Password must be at least 8 characters', { selector: '[data-slot=field-error]' }),
+    ).toBeTruthy();
     expect(mockedApi.post).not.toHaveBeenCalled();
   });
 

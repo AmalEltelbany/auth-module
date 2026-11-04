@@ -22,9 +22,9 @@ describe('passwordSchema', () => {
   it('reports every failing rule, not just the first', () => {
     const result = passwordSchema.safeParse('abc');
     expect(result.error?.issues.map((i) => i.message)).toEqual([
-      'At least 8 characters',
-      'One number',
-      'One special character',
+      'Password must be at least 8 characters',
+      'Password must contain a number',
+      'Password must contain a special character, like ! or #',
     ]);
   });
 });

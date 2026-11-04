@@ -18,7 +18,7 @@ export const nameSchema = z
 
 // Every failing rule is reported, so the UI can show them all at once.
 export const passwordSchema = passwordRules.reduce(
-  (schema, rule) => schema.refine(rule.test, rule.label),
+  (schema, rule) => schema.refine(rule.test, rule.error),
   z.string().max(PASSWORD_MAX_LENGTH, 'Password is too long'),
 );
 
