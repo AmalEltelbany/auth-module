@@ -66,7 +66,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       api
         .get<User>('/users/me')
         .then((user) => setState({ status: 'authenticated', user }))
-        .catch(() => setState({ status: 'unauthenticated' }));
+        // Offline or a restarting API isn't "signed out": keep the session and
+        // check again on the next visit. Only a 401 ends it.
+        .catch((error: unknown) => {
+          if (error instanceof ApiError && error.status === 401) setState({ status: 'unauthenticated' });
+        });
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);

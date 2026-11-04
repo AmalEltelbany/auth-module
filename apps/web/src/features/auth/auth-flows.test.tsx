@@ -32,6 +32,21 @@ describe('route guards', () => {
     expect(mockedApi.get).toHaveBeenCalledTimes(2);
   });
 
+  it('stays signed in when the tab comes back while offline, and signs out on a 401', async () => {
+    mockedApi.get.mockResolvedValueOnce(ada);
+    renderApp('/');
+    expect(await screen.findByRole('heading', { name: 'Welcome to the application.' })).toBeTruthy();
+
+    mockedApi.get.mockRejectedValueOnce(problem(0));
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(mockedApi.get).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('heading', { name: 'Welcome to the application.' })).toBeTruthy();
+
+    mockedApi.get.mockRejectedValueOnce(problem(401));
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeTruthy();
+  });
+
   it('shows a not-found page with a way home for an unknown path', async () => {
     mockedApi.get.mockRejectedValue(problem(401));
     renderApp('/no-such-page');
