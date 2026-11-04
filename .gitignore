@@ -9,7 +9,8 @@ playwright-report/
 # local research notes (not part of the submission), except the UI decisions
 docs/*
 !docs/UI.md
-!docs/architecture.png
+!docs/flow.png
+!docs/flow.excalidraw
 !docs/system-design.png
 !docs/system-design.excalidraw
 

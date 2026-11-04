@@ -1,28 +1,12 @@
 # Application
 
-Application (repo: `auth-module`). Sign up, sign in and a protected welcome page, plus email verification and password reset with one-time codes, built with **NestJS 12 + MongoDB** and **React 19 + TypeScript**.
+Application (repo: `auth-module`). Sign up, sign in and a protected welcome page, plus email verification and password reset with one-time codes, built with **NestJS 12 + MongoDB** and **React 19 + TypeScript**. How AI was used, and every decision behind it, is in [AI.md](AI.md).
 
 ```
 apps/api         NestJS API (auth, users, sessions, mail)
 apps/web         React app (Vite, Tailwind, shadcn/ui)
 packages/shared  zod schemas and password rules used by BOTH apps
 ```
-
-## System design
-
-Tokens stay in two httpOnly cookies. `apps/web` posts to `/api` with `credentials: 'include'`. The Nest API sets `__Host-access_token` (15 min) and `__Host-refresh_token` (7 days), and `AuthService` decides lockout, rotation, and one-time codes. Users, sessions, and codes are separate writers into one MongoDB replica set. Mail and the Have I Been Pwned range API sit outside that process: signup does not wait for mail, and a breached-password check fails open.
-
-![Auth module architecture: the React app calls the Nest API, AuthService writes users, sessions and codes to MongoDB, and mail and HIBP sit outside the process](docs/architecture.png)
-
-![Auth module system design: the request sets httpOnly cookies, Mongo stores hashes rather than secrets, and password reset spends the code before the transaction](docs/system-design.png)
-
-The map is the runtime shape. The drawing under it is the same design, argued in three bands.
-
-**Request.** React calls the API. The controller writes the cookies, and page scripts leave them alone. On a 401 from a protected call, the web app refreshes once, and every caller in that moment shares that one refresh. A second presentation of the same refresh token revokes the family.
-
-**Stored form.** The user document keeps an argon2id hash (`select: false`) and a `sessionVersion`. A session row keeps the sha256 of the refresh token. A code row keeps an HMAC of the 6-digit code. Five wrong attempts kill that code. Ten wrong codes per account per day cap guessing that works by asking for a fresh code.
-
-**Reset order.** The breached-password check runs first, so a rejected password leaves the code unused. The code is then consumed outside any transaction, and the attempt stays spent if the request fails. After that, one transaction saves the new hash, bumps `sessionVersion`, revokes every session family, and deletes reset codes.
 
 ## Quick start
 
@@ -50,27 +34,31 @@ npm run dev -w @auth-module/web            # http://localhost:5173
 | http://localhost:8025 | **Mailpit**, the inbox that catches every email (verification and reset codes) |
 | http://localhost:3001/api/docs | Swagger / OpenAPI |
 
-Try it: sign up → you land on **"Welcome to the application."** with a banner → **Enter OTP** → copy the OTP from Mailpit → verified. Then log out → **Forgot password?** → OTP from Mailpit → **Continue** → new password.
+**Try it:**
+1. Sign up. You land on **"Welcome to the application."** with a banner.
+2. **Enter OTP**, using the code from Mailpit. The banner disappears.
+3. **Sign out**, then **Forgot password?** and enter your email.
+4. Enter the OTP from Mailpit, **Confirm**, choose a new password, **Reset password**. You are sent to sign in, and every other device is signed out.
 
 ## Scripts (from the repo root)
 
-| Command | Does |
-|---|---|
-| `npm test` | unit and integration tests: shared, API (in-memory Mongo replica set), web (real route table, network mocked) |
-| `npm run test:e2e` | Playwright in Chromium against the running stack. Needs `docker compose up`; starts the API and web dev servers if they aren't running. First time: `npx playwright install chromium` |
-| `npm run typecheck` | `tsc` in every package |
-| `npm run lint` | oxlint |
-| `npm run build` | builds shared, API and web |
+| Command | Does | In CI |
+|---|---|---|
+| `npm run lint` | oxlint | ✅ |
+| `npm run typecheck` | `tsc` in every package | ✅ |
+| `npm test` | unit and integration tests: shared, API (in-memory Mongo replica set), web (real route table, network mocked) | ✅ |
+| `npm run build` | builds shared, API and web | ✅ |
+| `npm run test:e2e` | Playwright in Chromium against the running stack. Needs `docker compose up`; starts the API and web dev servers if they aren't running. First time: `npx playwright install chromium` | no, it needs Docker and Mailpit |
 
-CI (`.github/workflows/ci.yml`) runs all four on every push and pull request.
+CI is `.github/workflows/ci.yml`, on every push and pull request.
 
 ## Features
 
 - **Sign up**: email, name (3 or more characters), password (8 or more characters, with a letter, a number and a special character). The same zod schema validates the form and the API.
-- **Sign in / log out**: sessions in httpOnly cookies. Logout revokes the session on the server.
+- **Sign in / sign out**: sessions in httpOnly cookies. Sign out revokes the session on the server.
 - **Protected page**: the welcome page, backed by `GET /api/users/me`.
-- **Email verification**: a 6-digit code emailed at sign-up, entered in the app. You can resend it.
-- **Password reset**: request a code, then enter email, code and new password. **Every device is signed out.**
+- **Email verification**: a 6-digit OTP emailed at sign-up, entered in the app. You can resend it.
+- **Password reset**: request an OTP, enter it, then choose a new password. **Every device is signed out.**
 
 ## API
 
@@ -84,14 +72,32 @@ CI (`.github/workflows/ci.yml`) runs all four on every push and pull request.
 | GET | `/api/users/me` | signed in (the protected endpoint) |
 | GET | `/api/health` | public |
 
+Every route requires a session unless it is marked `@Public()`: a global guard checks the access cookie and its `sessionVersion`.
+
 Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details. Validation errors carry `errors: [{ path, message }]`, which the web app shows under the matching field.
+
+## System design
+
+Tokens stay in two httpOnly cookies. `apps/web` posts to `/api` with `credentials: 'include'`. The Nest API sets `__Host-access_token` (15 min) and `__Host-refresh_token` (7 days), and `AuthService` decides lockout, rotation and one-time codes. Three collections live in one MongoDB replica set: users, sessions and one-time codes. Mail and the Have I Been Pwned range API sit outside the API: sign-up doesn't wait for mail, and the breached-password check fails open.
+
+![How the auth module works: sign up or sign in leads to the protected welcome page; from there the user verifies the email with an OTP or signs out; forgot password leads to a reset with an OTP and back to sign in](docs/flow.png)
+
+The flow above is what a user does and which API call each page makes. The drawing below goes one level deeper, in three parts: how a request refreshes, what Mongo stores, and the order of a password reset.
+
+![Auth module system design: an expired access token triggers one shared refresh, Mongo stores hashes and counters rather than secrets, and password reset spends the code before the transaction](docs/system-design.png)
+
+**Request and refresh.** React calls the API, and the API writes the cookies; page scripts can't read them. When a protected call gets a 401, the web app refreshes once and retries. Every caller in that moment, in every tab, shares that one refresh (a Web Lock spans the tabs). A second presentation of the same refresh token revokes the whole family.
+
+**What Mongo stores.** The user document keeps an argon2id hash (`select: false`), a `sessionVersion`, and the counters behind the limits: wrong passwords and the lock, and wrong codes in the last 24 hours. A session row keeps the sha256 of the refresh token and the `sessionVersion` it was issued under, so a token from before a reset can't be exchanged. A code row keeps an HMAC of the 6-digit code. Five wrong attempts kill that code. Ten wrong codes per account per day cap guessing that works by asking for a fresh code.
+
+**Reset order.** The breached-password check runs first, so a rejected password leaves the code unused. The code is then checked outside any transaction, so the attempt stays spent even if the request fails. After that, one transaction saves the new hash, bumps `sessionVersion`, marks the email verified, deletes reset codes and revokes every session family.
 
 ## Security design
 
 **Sessions**
 - **httpOnly cookies only.** JavaScript never sees a token: `__Host-access_token` (JWT, 15 min) and `__Host-refresh_token` (opaque, 7 days), both `Secure` and `SameSite=Strict`. The `__Host-` prefix stops a sibling subdomain from planting cookies.
 - **Refresh-token rotation with reuse detection.** Every refresh issues a new token. Presenting an already-used token revokes that whole session family, because it means the token was copied.
-- **`sessionVersion`**: every token carries the user's version. A password reset bumps it, which kills all access *and* refresh tokens at once.
+- **`sessionVersion`**: access tokens and session rows carry the user's version. A password reset bumps it, which kills all access *and* refresh tokens at once.
 
 **Passwords and sign-in**
 - **Hashing:** argon2id.
@@ -112,7 +118,7 @@ Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details. V
 
 **Platform**
 - **Built into NestJS 12:** security headers (`useSecurityHeaders()`), CSRF protection (`enableCsrfProtection()`, Fetch Metadata), and cookie handling.
-- **Password reset is one Mongo transaction:** new hash, `sessionVersion++`, revoke sessions, delete codes.
+- **Password reset is one Mongo transaction:** new hash, `sessionVersion++`, email verified, reset codes deleted, sessions revoked.
 
 ## Testing
 
@@ -129,11 +135,9 @@ Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details. V
 | Decision | Why |
 |---|---|
 | Signup returns **409** for a taken email | It reveals that the account exists. Accepted for a clearer sign-up; forgot-password and sign-in don't leak this. |
+| Unverified users can use the app | Verification shows a banner instead of blocking, so sign-up works without an inbox. Gate features on `emailVerified` when one needs a proven address. |
 | Minimum password length **8** | The task's spec. NIST 800-63B rev 4 suggests 15 for single-factor passwords. The breach check covers much of the gap. |
 | Lockout can be triggered by someone else | It lasts only 15 minutes, and a password reset lifts it immediately. |
-| Rate limits are kept in memory, per instance | Enough for one instance. Lockout and code attempts are stored in Mongo, so they already work across instances. Use Redis or Mongo throttler storage to scale out. |
+| Rate limits are kept in memory, per instance | Enough for one instance. Lockout and code attempts are stored in Mongo, so they already work across instances. Use Redis or Mongo throttler storage to scale out. Behind a reverse proxy, set `TRUST_PROXY=1` so the limits see the client's IP, not the proxy's. |
 | Per-IP throttling is off in e2e tests | All test traffic comes from one IP. Per-account limits (lockout, code attempts) stay fully tested. |
-
-## AI usage
-
-See [AI.md](AI.md).
+| Swagger is served in every environment | Handy for reviewing this project. For a public deployment, mount it only outside production. |
