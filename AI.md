@@ -6,8 +6,8 @@
 |---|---|
 | **Tool** | Claude Code|
 | **Mode** | Agent: it reads files, runs commands, edits code, and spawns background research sub-agents |
-| **What AI did** | Planning, research against primary sources, scaffolding, boilerplate, first drafts of code and tests |
-| **What I did** | Set scope, made every decision in the log below, pushed back on over-engineering, reviewed and verified output |
+| **What AI did** | Proposed options, researched primary sources, wrote scaffolding, boilerplate and first drafts of code and tests. It never had the final word. |
+| **What I did** | Owned every decision: set the scope, chose between the options, overruled the AI where I disagreed, cut over-engineering, and reviewed and verified every change before it was committed |
 | **Guardrails** | `AGENTS.md` (loaded by Claude Code through `CLAUDE.md`) constrains what the agent writes; the "pinned tests" stop it from weakening security tests |
 
 ## How I worked
@@ -17,6 +17,7 @@
 3. **Audit the AI's own design.** I had a second research pass grade the drafted verify/reset design against OWASP, NIST and ASVS. It found 7 issues (see Corrections).
 4. **Write rules before code.** I converted the decisions into one agent rules file (`AGENTS.md`, with `CLAUDE.md` importing it), modelled on rules I use in another production repo, so generated code follows them from the first commit.
 5. **Build in small logged steps.** Every build step below records the prompt, what was generated, what I changed and how it was verified.
+6. **AI proposes, I decide.** For each choice I asked for the options and their trade-offs, then picked one myself. A recommendation went in only after I checked it against the task, the evidence and the rest of the design; when I disagreed, I overruled it (decisions 2, 8, 9, 10, 13, 14, 32).
 
 ## Prompts that worked well
 
@@ -61,51 +62,51 @@
 
 ## Decisions log
 
-Who decided: **Me** (my call), **Me ← AI** (I accepted the AI's recommendation), **Me ≠ AI** (I chose differently from the AI), **Research** (forced by primary-source evidence).
+I made every decision below. The **Basis** column shows what I based each one on: **My idea** (the AI didn't raise it), **AI proposal, reviewed** (I checked the AI's recommendation and adopted it), **Overruled AI** (I chose differently from the AI), **Evidence** (I followed what primary sources or a security review showed).
 
-| # | Decision | Options | Chosen | Who | Why |
+| # | Decision | Options | Chosen | Basis | Why |
 |---|---|---|---|---|---|
-| 1 | Repo shape | two folders / npm workspaces / Nx | npm workspaces: `apps/*` + `packages/shared` | Me ← AI | One copy of the validation rules for both apps |
-| 2 | Scope | minimum task / full auth | Full: refresh rotation, email verification, password reset | Me ≠ AI | AI sized it for a few hours; I wanted production depth |
-| 3 | TypeScript | 7 / 6 | `~6.0` | Research | The Nest CLI and Swagger don't support TS 7; typescript-eslint requires `<6.1` |
-| 4 | Validation | class-validator / zod | zod, shared by both apps | Me ← AI | Nest 12 accepts zod natively; one schema for UI and API |
-| 5 | Signup when the email fails | roll back / keep user | Keep user and offer resend | Me ← AI | Signup can't be blocked by an optional feature |
-| 6 | Unverified users | can sign in / blocked | Can sign in, with a banner | Me ← AI | Graders reach the welcome page without an inbox |
-| 7 | Password minimum length | 8 / 12 / 15 (NIST) | 8 | Me | It's the task spec; documented as a deviation from NIST |
-| 8 | UI base | Base UI (shadcn default) / Radix | **Radix** | Me ≠ AI | Mature, and most examples use it; AI recommended Base UI |
-| 9 | Toasts | cut / sonner | **Keep sonner** | Me ≠ AI | AI cut it while trimming; I want toasts |
-| 10 | Libraries | full researched list / trimmed | Trimmed: 12 cut | Me ≠ AI | AI's research list was too heavy for the scope |
-| 11 | Frontend state | Redux / TanStack Query / context | Context + `BroadcastChannel` | Me ← AI | No real server data to cache |
-| 12 | Email in dev | real provider / Mailpit | Mailpit + log fallback | Me ← AI | No account or keys needed by graders |
-| 13 | Agent rules format | single CLAUDE.md / AGENTS.md + 5 scoped rule files | One `AGENTS.md`, imported by `CLAUDE.md` | Me ≠ AI | AI split rules into 5 Cursor files; we use Claude Code, so one file is simpler |
-| 14 | Repo name | fullstack-auth / auth-module / nest-react-auth | `auth-module` | Me ≠ AI | Matches the task's wording ("implement a module") |
-| 15 | Research notes | commit / keep local | Keep local, git-ignored | Me | Personal working notes, not part of the submission |
-| 16 | What counts as a letter / special character | ASCII `[a-z]` / Unicode `\p{L}`; space special or not | Unicode letters; space is **not** special | Me ← AI | Non-English names and passwords work; a space alone doesn't satisfy "special" |
-| 17 | Security headers / CSRF / cookies | helmet + csrf-csrf + cookie-parser / Nest 12 built-ins | Built-ins | Research | Found in the installed framework; three fewer dependencies |
-| 18 | Unknown email at sign-in | return 401 immediately / verify against a dummy hash | Dummy-hash verify | Me ← AI | Same response time for unknown and wrong-password, so timing doesn't reveal accounts |
-| 19 | jsdom version | 30 (needs Node ≥ 24.15) / 29.1 | 29.1 | Me ← AI | My machine (and likely graders') runs Node 24.14; no behaviour difference for these forms |
-| 20 | Linter | ESLint + plugins / oxlint from the Vite template | oxlint | Me ← AI | The template's default; no ESLint 10 plugin-compatibility problems |
-| 21 | Security review: logout only clears the cookie | bump `sessionVersion` / revoke the refresh family in step 4 | Step 4 | Me ← AI | `sessionVersion` would sign out every device; a 15-min access token is the accepted residual window |
-| 22 | Security review: signup 409 reveals registered emails | email-only signup / keep 409 | Keep, documented | Me | Already a documented trade-off; a better UX for this task |
-| 23 | After sign-in, where to go | `navigate()` in each form hook / let the `<GuestOnly>` route redirect | Route redirect | Me ← AI | One place handles "return to the page you asked for" |
-| 24 | Refresh cookie scope | `__Host-` (forces `Path=/`) / `__Secure-` with `Path=/api/auth` | ~~`__Secure-`, `/api/auth`~~ → **`__Host-`, `/`** | Me ← AI, then **Research** | First chosen to keep the 7-day token off other routes. Reversed after a security review: path scoping only limits exposure to our own server, while `__Secure-` opens a cross-subdomain attack |
-| 25 | Logout scope | this device / all devices | This device (revokes its family) | Me ← AI | Logging out on a phone shouldn't sign out the laptop; "all devices" comes with password reset |
-| 26 | Parallel refresh with the same token | grace window / strict single-use + single-flight client | Strict + single-flight | Me ← AI | No window in which a stolen token works; the client guarantees one refresh at a time |
-| 27 | How to prove pinned tests | trust them / break the guarded code once | Mutation check | Me ← AI | Both pinned tests failed with the protection removed and passed with it restored |
-| 28 | Email format | HTML templates (library) / plain text | Plain text | Me ← AI | Three short transactional messages; Mailpit and every client render them; no template dependency |
-| 29 | SMTP missing | log mail everywhere / log in dev, refuse to boot in production | Dev-only logging | Me ← AI | Losing reset emails silently in production is worse than a failed deploy |
-| 30 | Per-account mail limit | in-memory counter / "token issued in the last 60 s?" from Mongo | Mongo query | Me ← AI | Works across instances, zero new code paths; the IP throttle covers bursts |
-| 31 | Where verify/reset logic lives | new `RecoveryService` / `AuthService` | `AuthService` | Me ← AI | One cohesive auth service; split it if it grows further |
-| 32 | **Email links vs one-time codes** | links (built in step 5) / 6-digit OTP | **OTP for both flows** | **Me ≠ AI** | My call mid-build, after the link flow was built and verified. No link scanners burning tokens, no `APP_URL`, and the user stays in the app |
-| 33 | OTP design | 6 digits, 10 min, 5 tries / 8 digits, 15 min | 6 digits, 10 min, 5 tries | Me ← AI | ASVS 6.5.5 caps out-of-band codes at 10 min; 5 tries in 10⁶ is a 0.0005% guess chance |
-| 34 | Storing codes | sha256 / HMAC with a server key / argon2 | HMAC (key: the JWT secret) | Me ← AI | sha256 of 10⁶ values reverses instantly from a leaked DB; argon2 is unneeded with 5 attempts. Rotating the secret only voids codes ≤ 10 min old |
-| 35 | Where attempts are counted | inside the reset transaction / before it | Before, atomically | Me ← AI | Inside, a wrong guess's attempt would roll back with the aborted transaction: unlimited guesses |
-| 36 | Locked account response | "account locked" / generic 401 | Generic 401 | Me ← AI | A distinct message confirms the account exists; reset is the way out |
-| 37 | Per-IP throttling in e2e | keep (tests hit limits) / skip when `NODE_ENV=test` | Skip in tests | Me ← AI | All test traffic shares one IP. 429 verified manually; per-account limits stay tested |
-| 38 | Breach check on HIBP outage | fail closed / fail open | Fail open | Me ← AI | An outage of a third-party API must not block sign-up or reset |
-| 39 | Guessing limits | per code only / per code + per-account daily budget | Both | **Research** | Security review showed per-code limits reset with every new code |
-| 40 | Counting attempts | check, then increment / reserve atomically, then verify, refund on success | Reserve first | **Research** | Only the atomic version holds under parallel requests |
-| 41 | "Confirm password" on reset | keep / drop | Drop | **Research** | web.dev form guidance: the show-password toggle catches typos; typing it twice is friction |
+| 1 | Repo shape | two folders / npm workspaces / Nx | npm workspaces: `apps/*` + `packages/shared` | AI proposal, reviewed | One copy of the validation rules for both apps |
+| 2 | Scope | minimum task / full auth | Full: refresh rotation, email verification, password reset | Overruled AI | AI sized it for a few hours; I wanted production depth |
+| 3 | TypeScript | 7 / 6 | `~6.0` | Evidence | The Nest CLI and Swagger don't support TS 7; typescript-eslint requires `<6.1` |
+| 4 | Validation | class-validator / zod | zod, shared by both apps | AI proposal, reviewed | Nest 12 accepts zod natively; one schema for UI and API |
+| 5 | Signup when the email fails | roll back / keep user | Keep user and offer resend | AI proposal, reviewed | Signup can't be blocked by an optional feature |
+| 6 | Unverified users | can sign in / blocked | Can sign in, with a banner | AI proposal, reviewed | Graders reach the welcome page without an inbox |
+| 7 | Password minimum length | 8 / 12 / 15 (NIST) | 8 | My idea | It's the task spec; documented as a deviation from NIST |
+| 8 | UI base | Base UI (shadcn default) / Radix | **Radix** | Overruled AI | Mature, and most examples use it; AI recommended Base UI |
+| 9 | Toasts | cut / sonner | **Keep sonner** | Overruled AI | AI cut it while trimming; I want toasts |
+| 10 | Libraries | full researched list / trimmed | Trimmed: 12 cut | Overruled AI | AI's research list was too heavy for the scope |
+| 11 | Frontend state | Redux / TanStack Query / context | Context + `BroadcastChannel` | AI proposal, reviewed | No real server data to cache |
+| 12 | Email in dev | real provider / Mailpit | Mailpit + log fallback | AI proposal, reviewed | No account or keys needed by graders |
+| 13 | Agent rules format | single CLAUDE.md / AGENTS.md + 5 scoped rule files | One `AGENTS.md`, imported by `CLAUDE.md` | Overruled AI | AI split rules into 5 Cursor files; we use Claude Code, so one file is simpler |
+| 14 | Repo name | fullstack-auth / auth-module / nest-react-auth | `auth-module` | Overruled AI | Matches the task's wording ("implement a module") |
+| 15 | Research notes | commit / keep local | Keep local, git-ignored | My idea | Personal working notes, not part of the submission |
+| 16 | What counts as a letter / special character | ASCII `[a-z]` / Unicode `\p{L}`; space special or not | Unicode letters; space is **not** special | AI proposal, reviewed | Non-English names and passwords work; a space alone doesn't satisfy "special" |
+| 17 | Security headers / CSRF / cookies | helmet + csrf-csrf + cookie-parser / Nest 12 built-ins | Built-ins | Evidence | Found in the installed framework; three fewer dependencies |
+| 18 | Unknown email at sign-in | return 401 immediately / verify against a dummy hash | Dummy-hash verify | AI proposal, reviewed | Same response time for unknown and wrong-password, so timing doesn't reveal accounts |
+| 19 | jsdom version | 30 (needs Node ≥ 24.15) / 29.1 | 29.1 | AI proposal, reviewed | My machine (and likely graders') runs Node 24.14; no behaviour difference for these forms |
+| 20 | Linter | ESLint + plugins / oxlint from the Vite template | oxlint | AI proposal, reviewed | The template's default; no ESLint 10 plugin-compatibility problems |
+| 21 | Security review: logout only clears the cookie | bump `sessionVersion` / revoke the refresh family in step 4 | Step 4 | AI proposal, reviewed | `sessionVersion` would sign out every device; a 15-min access token is the accepted residual window |
+| 22 | Security review: signup 409 reveals registered emails | email-only signup / keep 409 | Keep, documented | My idea | Already a documented trade-off; a better UX for this task |
+| 23 | After sign-in, where to go | `navigate()` in each form hook / let the `<GuestOnly>` route redirect | Route redirect | AI proposal, reviewed | One place handles "return to the page you asked for" |
+| 24 | Refresh cookie scope | `__Host-` (forces `Path=/`) / `__Secure-` with `Path=/api/auth` | ~~`__Secure-`, `/api/auth`~~ → **`__Host-`, `/`** | AI proposal, reviewed; then reversed on **Evidence** | First chosen to keep the 7-day token off other routes. Reversed after a security review: path scoping only limits exposure to our own server, while `__Secure-` opens a cross-subdomain attack |
+| 25 | Logout scope | this device / all devices | This device (revokes its family) | AI proposal, reviewed | Logging out on a phone shouldn't sign out the laptop; "all devices" comes with password reset |
+| 26 | Parallel refresh with the same token | grace window / strict single-use + single-flight client | Strict + single-flight | AI proposal, reviewed | No window in which a stolen token works; the client guarantees one refresh at a time |
+| 27 | How to prove pinned tests | trust them / break the guarded code once | Mutation check | AI proposal, reviewed | Both pinned tests failed with the protection removed and passed with it restored |
+| 28 | Email format | HTML templates (library) / plain text | Plain text | AI proposal, reviewed | Three short transactional messages; Mailpit and every client render them; no template dependency |
+| 29 | SMTP missing | log mail everywhere / log in dev, refuse to boot in production | Dev-only logging | AI proposal, reviewed | Losing reset emails silently in production is worse than a failed deploy |
+| 30 | Per-account mail limit | in-memory counter / "token issued in the last 60 s?" from Mongo | Mongo query | AI proposal, reviewed | Works across instances, zero new code paths; the IP throttle covers bursts |
+| 31 | Where verify/reset logic lives | new `RecoveryService` / `AuthService` | `AuthService` | AI proposal, reviewed | One cohesive auth service; split it if it grows further |
+| 32 | **Email links vs one-time codes** | links (built in step 5) / 6-digit OTP | **OTP for both flows** | **Overruled AI** | My call mid-build, after the link flow was built and verified. No link scanners burning tokens, no `APP_URL`, and the user stays in the app |
+| 33 | OTP design | 6 digits, 10 min, 5 tries / 8 digits, 15 min | 6 digits, 10 min, 5 tries | AI proposal, reviewed | ASVS 6.5.5 caps out-of-band codes at 10 min; 5 tries in 10⁶ is a 0.0005% guess chance |
+| 34 | Storing codes | sha256 / HMAC with a server key / argon2 | HMAC (key: the JWT secret) | AI proposal, reviewed | sha256 of 10⁶ values reverses instantly from a leaked DB; argon2 is unneeded with 5 attempts. Rotating the secret only voids codes ≤ 10 min old |
+| 35 | Where attempts are counted | inside the reset transaction / before it | Before, atomically | AI proposal, reviewed | Inside, a wrong guess's attempt would roll back with the aborted transaction: unlimited guesses |
+| 36 | Locked account response | "account locked" / generic 401 | Generic 401 | AI proposal, reviewed | A distinct message confirms the account exists; reset is the way out |
+| 37 | Per-IP throttling in e2e | keep (tests hit limits) / skip when `NODE_ENV=test` | Skip in tests | AI proposal, reviewed | All test traffic shares one IP. 429 verified manually; per-account limits stay tested |
+| 38 | Breach check on HIBP outage | fail closed / fail open | Fail open | AI proposal, reviewed | An outage of a third-party API must not block sign-up or reset |
+| 39 | Guessing limits | per code only / per code + per-account daily budget | Both | **Evidence** | Security review showed per-code limits reset with every new code |
+| 40 | Counting attempts | check, then increment / reserve atomically, then verify, refund on success | Reserve first | **Evidence** | Only the atomic version holds under parallel requests |
+| 41 | "Confirm password" on reset | keep / drop | Drop | **Evidence** | web.dev form guidance: the show-password toggle catches typos; typing it twice is friction |
 
 **UI decisions (42–48)** are in [docs/UI.md](docs/UI.md#ui-decisions).
 
